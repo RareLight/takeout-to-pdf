@@ -47,7 +47,37 @@ GTK3 Runtime (for PDF rendering)
 
 ## 📥 Installation
 
-### Prerequisites
+### macOS Setup with Miniconda
+
+1. **Install System Dependencies** (required for weasyprint)
+   ```bash
+   # Using Homebrew (install if needed: https://brew.sh)
+   brew install python@3.10 cairo pango gdk-pixbuf libffi pkg-config
+   ```
+
+2. **Install Miniconda** (if not already installed)
+   ```bash
+   # Download and run the installer
+   curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+   bash Miniconda3-latest-MacOSX-arm64.sh
+   
+   # For Intel Macs, use MacOSX-x86_64.sh instead
+   ```
+
+3. **Create and Activate Virtual Environment**
+   ```bash
+   conda create -n takeout-to-pdf python=3.10
+   conda activate takeout-to-pdf
+   ```
+
+4. **Install Python Dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Other Platforms
+
+**Prerequisites**
 
 ```bash
 # Windows GTK3 Setup (required for weasyprint)
@@ -55,7 +85,7 @@ winget install -e --id TheMSYS2.MSYS2
 pacman -S mingw-w64-x86_64-gtk3
 ```
 
-### Package Installation
+**Package Installation**
 
 ```bash
 uv venv  # Create virtual environment
@@ -64,13 +94,38 @@ uv install mailbox weasyprint beautifulsoup4 tqdm
 
 ## 🖥️ Usage
 
+### Basic Usage
+
 ```bash
 # Basic conversion (outputs to ./emails_combined.pdf)
-uv run main.py --input ./takeout.mbox
+python main.py --input ./takeout.mbox
 
-# Custom output path
-uv run main.py -i ./takeout.mbox -o ./archive/project_emails.pdf
+# Custom output path (if filtering)
+python main.py -i ./takeout.mbox -e your-email@example.com
 ```
+
+### Filtering by Email Address
+
+The `-e` or `--email` flag allows you to filter emails by a specific email address. The filter searches across all email fields (From, To, CC, BCC) and includes any email where the specified address appears:
+
+```bash
+# Filter emails involving client@company.com
+python main.py -i ./takeout.mbox -e "client@company.com"
+# Output: client@company.com.pdf
+
+# Filter emails from a specific person
+python main.py -i ./takeout.mbox -e "john@example.com"
+# Output: john@example.com.pdf
+```
+
+**Filter Behavior:**
+- Case-insensitive matching
+- Includes emails where the specified address appears in any of these fields:
+  - **From**: Emails sent by this address
+  - **To**: Emails sent to this address
+  - **CC**: Emails where this address was CC'd
+  - **BCC**: Emails where this address was BCC'd
+- Output filename is automatically set to `{email_address}.pdf`
 
 ### Exporting Emails from Google Takeout
 
@@ -95,7 +150,7 @@ uv run main.py -i ./takeout.mbox -o ./archive/project_emails.pdf
 
 ```bash
 # Create searchable family history archive
-uv run main.py -i ./family_emails.mbox -o family_memories.pdf
+python main.py -i ./family_emails.mbox
 ```
 
 ### 🚚 Data Migration

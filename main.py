@@ -1,17 +1,40 @@
 import mailbox
 import os
+import sys
 import base64
 import html
+import argparse
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from weasyprint import HTML
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 
-# Configuration
-MBOX_PATH = "emails.mbox"
-OUTPUT_PDF = "emails_combined.pdf"
+# Parse command line arguments
+parser = argparse.ArgumentParser(
+    description="Convert MBOX emails to PDF",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog="""
+Examples:
+  python main.py -i username@gmail.com.mbox/mbox
+  python main.py -i username@gmail.com.mbox/mbox -e "somesender@domain.com"
+    """
+)
+parser.add_argument("-i", "--input", required=True, help="Path to MBOX file")
+parser.add_argument("-e", "--email", help="Filter emails by specific email address")
+
+args = parser.parse_args()
+
+MBOX_PATH = args.input
+FILTER_EMAIL = args.email
 TEMP_IMG_DIR = "temp_images"
+
+# Set output PDF name based on whether filtering by email
+if FILTER_EMAIL:
+    OUTPUT_PDF = f"{FILTER_EMAIL}.pdf"
+else:
+    OUTPUT_PDF = "emails_combined.pdf"
+
 os.makedirs(TEMP_IMG_DIR, exist_ok=True)
 
 
@@ -96,11 +119,28 @@ def _extract_images(message) -> list:
     return images
 
 
+def _email_matches_filter(from_addr: str, to_addr: str, cc_addr: str, bcc_addr: str, filter_email: str) -> bool:
+    """Check if email matches the filter criteria"""
+    if not filter_email:
+        return True
+    
+    filter_lower = filter_email.lower()
+    addresses = [from_addr, to_addr, cc_addr, bcc_addr]
+    
+    for addr_field in addresses:
+        if addr_field and filter_lower in addr_field.lower():
+            return True
+    return False
+
+
 def process_email(message):
     """Process email with reduced complexity through helper functions"""
     email_data = {
         "date": parsedate_to_datetime(message["date"]) if message["date"] else None,
         "from": decode_mime(message["from"]) or "Unknown Sender",
+        "to": decode_mime(message["to"]) or "",
+        "cc": decode_mime(message["cc"]) or "",
+        "bcc": decode_mime(message["bcc"]) or "",
         "subject": decode_mime(message["subject"]) or "No Subject",
         "body": "[No content available]",
         "images": []
@@ -123,13 +163,17 @@ print("Loading and processing emails...")
 mbox = mailbox.mbox(MBOX_PATH)
 emails = []
 for message in tqdm(mbox, desc="Processing emails"):
-    emails.append(process_email(message))
+    processed_email = process_email(message)
+    # Apply email filter if specified
+    if _email_matches_filter(processed_email["from"], processed_email["to"], 
+                             processed_email["cc"], processed_email["bcc"], FILTER_EMAIL):
+        emails.append(processed_email)
 mbox.close()
 
 # Sort by date (oldest first)
 emails = sorted(
     [e for e in emails if e["date"]],
-    key=lambda x: x["date"]
+    key=lambda x: x["date"].replace(tzinfo=None) if x["date"].tzinfo else x["date"]
 ) + [e for e in emails if not e["date"]]
 
 # Build HTML content
@@ -176,9 +220,18 @@ for idx, email in enumerate(tqdm(emails, desc="Building HTML")):
     <div class="email">
         <h3>Email {idx+1}</h3>
         <div class="meta">
-            <div><strong>From:</strong> {email['from']}</div>
+            <div><strong>From:</strong> {html.escape(email['from'])}</div>"""
+    
+    if email["to"]:
+        html_template += f'<div><strong>To:</strong> {html.escape(email["to"])}</div>'
+    if email["cc"]:
+        html_template += f'<div><strong>CC:</strong> {html.escape(email["cc"])}</div>'
+    if email["bcc"]:
+        html_template += f'<div><strong>BCC:</strong> {html.escape(email["bcc"])}</div>'
+    
+    html_template += f"""
             <div><strong>Date:</strong> {date_str}</div>
-            <div><strong>Subject:</strong> {email['subject']}</div>
+            <div><strong>Subject:</strong> {html.escape(email['subject'])}</div>
         </div>
         <div class="body">{html.escape(email['body'])}</div>
         <div class="images">{images_html}</div>
