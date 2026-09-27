@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "takeout-to-pdf"
+version = "0.2.0"
+description = "Preserve and browse MBOX mail as chronological offline archives"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+  "beautifulsoup4>=4.12,<5",
+  "nh3>=0.3,<0.4",
+  "pypdf>=6,<7",
+  "weasyprint>=68,<71",
+  "Pillow>=11,<13",
+  "tzdata>=2025.1",
+]
+
+[project.scripts]
+takeout-to-pdf = "takeout_to_pdf.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<10", "hypothesis>=6,<7", "pytest-cov>=6,<8",
+  "ruff>=0.11", "mypy>=1.15", "pdfplumber>=0.11,<0.12",
+  "pytest-playwright>=0.7", "types-beautifulsoup4>=4.12",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib --strict-markers -ra"
+markers = ["performance: large synthetic archive benchmarks", "browser: offline browser tests", "visual: rendered page regression tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+include = ["src/**/*.py", "tests/**/*.py", "main.py", "scripts/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["weasyprint.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+branch = true
+source = ["takeout_to_pdf"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/takeout_to_pdf"]

@@ -1,0 +1,81 @@
+name: Extended archival checks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 1"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.11.7"
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  PYTHONUTF8: "1"
+
+jobs:
+  browsers:
+    name: Offline browser / ${{ matrix.browser }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install renderer libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fonts-dejavu-core fonts-noto-core
+      - run: uv sync --locked --dev
+      - run: uv run --locked playwright install --with-deps ${{ matrix.browser }}
+      - run: uv run --locked pytest tests/e2e --browser ${{ matrix.browser }} --junitxml=test-results/browser.xml --basetemp=test-results/browser-artifacts
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-${{ matrix.browser }}
+          path: test-results/
+
+  scale:
+    name: Large source scan and sample full-render recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install renderer libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fonts-dejavu-core fonts-noto-core
+      - run: uv sync --locked --dev
+      - name: Capture benchmark environment
+        run: |
+          mkdir -p test-results
+          uv run --locked python -m weasyprint --info > test-results/renderer.txt
+          dpkg-query -W > test-results/native-packages.txt
+      - name: Exercise properties, recovery, and archive scale
+        run: uv run --locked pytest tests/property tests/integration tests/performance --durations=0 --junitxml=test-results/extended.xml --basetemp=test-results/extended-artifacts
+      - name: Preserve benchmarks and failing examples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archival-scale-evidence
+          include-hidden-files: true
+          path: |
+            test-results/
+            .hypothesis/examples/

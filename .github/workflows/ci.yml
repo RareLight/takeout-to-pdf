@@ -1,0 +1,154 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.7"
+  TZ: UTC
+  PYTHONUTF8: "1"
+
+jobs:
+  unit:
+    name: Unit and property / Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: Install renderer libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0
+      - run: uv sync --locked --dev
+      - name: Unit and property tests
+        run: uv run --locked pytest tests/unit tests/property --cov --cov-report=xml --junitxml=test-results/unit.xml
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-python-${{ matrix.python }}
+          include-hidden-files: true
+          path: |
+            test-results/
+            coverage.xml
+            .hypothesis/examples/
+
+  static:
+    name: Formatting, lint, and types
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --dev
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked ruff check .
+      - run: uv run --locked mypy src
+
+  archive:
+    name: Linux archive, offline discovery, and layout
+    needs: [unit, static]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install renderer libraries and canonical fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fonts-dejavu-core fonts-noto-core poppler-utils
+      - run: uv sync --locked --dev
+      - name: Capture rendering environment
+        run: |
+          mkdir -p test-results
+          uv run --locked python -m weasyprint --info > test-results/renderer.txt
+          dpkg-query -W > test-results/native-packages.txt
+          fc-list > test-results/fonts.txt
+      - run: uv run --locked pytest tests/integration --junitxml=test-results/integration.xml --basetemp=test-results/integration-artifacts
+      - run: uv run --locked playwright install --with-deps chromium
+      - run: uv run --locked pytest tests/e2e --browser chromium --junitxml=test-results/e2e.xml --basetemp=test-results/e2e-artifacts
+      - run: uv run --locked pytest tests/visual --junitxml=test-results/visual.xml --basetemp=test-results/visual-artifacts
+      - name: Preserve archive and rendering evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-archive-evidence
+          include-hidden-files: true
+          path: |
+            test-results/
+            .hypothesis/examples/
+
+  platforms:
+    name: Export smoke / ${{ matrix.os }}
+    needs: [unit, static]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install macOS renderer libraries
+        if: runner.os == 'macOS'
+        run: |
+          brew install pango
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+      - name: Install Windows renderer libraries
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-pango
+      - name: Locate Windows renderer libraries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          "WEASYPRINT_DLL_DIRECTORIES=$env:MSYS2_LOCATION\ucrt64\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - run: uv sync --locked --dev
+      - run: uv run --locked python -m weasyprint --info
+      - run: uv run --locked pytest tests/integration --junitxml=test-results/platform.xml --basetemp=test-results/platform-artifacts
+      - name: Preserve platform evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-${{ matrix.os }}
+          path: test-results/
