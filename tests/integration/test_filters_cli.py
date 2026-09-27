@@ -3,6 +3,7 @@
 import json
 import mailbox
 from email.message import EmailMessage
+from pathlib import Path
 
 import pytest
 
@@ -115,3 +116,37 @@ def test_cli_reports_missing_source_and_zero_match_without_mutation(source, tmp_
 def test_cli_rejects_bad_period_before_creating_output(source, tmp_path):
     assert main(["-i", str(source), "-o", str(tmp_path / "bad"), "--end-date", "2007-13"]) == 2
     assert not (tmp_path / "bad").exists()
+
+
+def test_cli_accepts_mbox_as_first_positional_argument(source, tmp_path):
+    output = tmp_path / "positional"
+    assert main([str(source), "-o", str(output), "--sender", "alice@example.com"]) == 0
+    assert selected(type("Result", (), {"path": output})()) == ["BEFORE", "START"]
+
+
+def test_cli_rejects_missing_or_duplicate_input(source, tmp_path, capsys):
+    with pytest.raises(SystemExit) as missing:
+        main([])
+    assert missing.value.code == 2
+    assert "MBOX" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as duplicate:
+        main([str(source), "-i", str(source), "-o", str(tmp_path / "duplicate")])
+    assert duplicate.value.code == 2
+    assert not (tmp_path / "duplicate").exists()
+
+
+def test_cli_default_output_is_sibling_of_input(source, tmp_path, monkeypatch, capsys):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert main([str(source), "--sender", "nobody@example.com"]) == 0
+
+    archive_line = next(
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("Archive: ")
+    )
+    archive = Path(archive_line.removeprefix("Archive: "))
+    assert archive.parent == source.parent
+    assert (archive / "index.html").is_file()
+    assert not (elsewhere / "exports").exists()

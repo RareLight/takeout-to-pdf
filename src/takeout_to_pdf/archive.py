@@ -237,9 +237,8 @@ def export_archive(
     started = datetime.now(timezone.utc)
     output = (
         Path(output).absolute()
-        if output
-        else Path("exports").absolute()
-        / f"{safe_component(source.stem)}__{started:%Y-%m-%dT%H%M%SZ}__{run_id}"
+        if output is not None
+        else source.parent / f"{safe_component(source.stem)}__{started:%Y-%m-%dT%H%M%SZ}__{run_id}"
     )
     if output.exists() or output.is_symlink():
         raise ValueError(f"Output already exists; choose a new directory: {output}")

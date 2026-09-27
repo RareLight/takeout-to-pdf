@@ -13,33 +13,33 @@ uv sync --locked
 uv run takeout-to-pdf --help
 ```
 
-The locked test tools are available with `uv sync --locked --group dev`. The compatibility entrypoint `uv run python main.py -i input.mbox` is also supported. `uv.lock` and `pyproject.toml` are tracked so a clean checkout has reproducible Python dependencies. No network access is needed to open a completed archive.
+The locked test tools are available with `uv sync --locked --group dev`. Pass the MBOX as the first argument, followed by any options. The compatibility entrypoint `uv run python main.py input.mbox` is also supported; existing `-i/--input` commands still work. `uv.lock` and `pyproject.toml` are tracked so a clean checkout has reproducible Python dependencies. No network access is needed to open a completed archive.
 
 ## Export
 
 ```sh
 # Every input occurrence, one PDF per message (default)
-uv run takeout-to-pdf -i takeout.mbox
+uv run takeout-to-pdf takeout.mbox
 
 # Set a new archive directory; an existing destination is refused
-uv run takeout-to-pdf -i takeout.mbox -o exports/client-mail
+uv run takeout-to-pdf takeout.mbox -o exports/client-mail
 
 # One chronological PDF, with separate attachments beside it
-uv run takeout-to-pdf -i takeout.mbox --format single-pdf -o exports/single-file
+uv run takeout-to-pdf takeout.mbox --format single-pdf -o exports/single-file
 
 # Full technical headers and source byte preservation
-uv run takeout-to-pdf -i takeout.mbox --compliance -o exports/compliance
+uv run takeout-to-pdf takeout.mbox --compliance -o exports/compliance
 
 # Read-only integrity check of a completed archive
 uv run takeout-to-pdf verify exports/client-mail
 ```
 
-The tool never overwrites an existing archive. Without `-o`, it creates a uniquely named directory under `./exports`. An interrupted or fatal run leaves an explicitly marked incomplete staging directory. Do not treat that directory as a completed export.
+The tool never overwrites an existing archive. Without `-o`, it creates a uniquely named archive directory beside the input MBOX, regardless of the current working directory or output format. In single-PDF mode, the combined PDF and its separate attachments are inside that sibling directory. An interrupted or fatal run leaves an explicitly marked incomplete staging directory. Do not treat that directory as a completed export.
 
-Example directory layout:
+Example directory layout for `mail-folder/takeout.mbox`:
 
 ```text
-exports/takeout__2026-09-27T170000Z__abc12345/
+mail-folder/takeout__2026-09-27T170000Z__abc12345/
   index.html
   manifest.json
   messages.jsonl
@@ -61,13 +61,13 @@ Folder names use UTC timestamps and preserve source occurrences even when messag
 With no filters, the entire MBOX is processed. Repeated values of one filter are ORed; different filters are ANDed. Addresses match parsed mailboxes exactly, case-insensitively, without Gmail dot/plus alias rules. `-e` matches a participant; `--sender` is From-only; `--recipient` includes To, Cc and Bcc.
 
 ```sh
-uv run takeout-to-pdf -i takeout.mbox -e client@example.com
-uv run takeout-to-pdf -i takeout.mbox --sender alice@example.com --recipient me@example.net
-uv run takeout-to-pdf -i takeout.mbox --label Project --has-attachments
-uv run takeout-to-pdf -i takeout.mbox --has-attachments --attachment-scope all
-uv run takeout-to-pdf -i takeout.mbox --start-date 2005-12 --end-date 2007-06
-uv run takeout-to-pdf -i takeout.mbox --start-date 2012-01-22 --end-date 2017-09-09
-uv run takeout-to-pdf -i takeout.mbox --timezone America/Chicago --start-date 2012
+uv run takeout-to-pdf takeout.mbox -e client@example.com
+uv run takeout-to-pdf takeout.mbox --sender alice@example.com --recipient me@example.net
+uv run takeout-to-pdf takeout.mbox --label Project --has-attachments
+uv run takeout-to-pdf takeout.mbox --has-attachments --attachment-scope all
+uv run takeout-to-pdf takeout.mbox --start-date 2005-12 --end-date 2007-06
+uv run takeout-to-pdf takeout.mbox --start-date 2012-01-22 --end-date 2017-09-09
+uv run takeout-to-pdf takeout.mbox --timezone America/Chicago --start-date 2012
 ```
 
 Date boundaries may be a whole year (`YYYY`), month (`YYYY-MM`), or ISO day (`YYYY-MM-DD`). Both endpoints are inclusive at the precision you specify. `2005-12` through `2007-06` includes every instant in June 2007; the default calendar timezone is UTC. A different IANA timezone affects date filtering and displayed dates, while directory chronology stays UTC. Bad or missing Date headers remain visible under `undated` when no date filter is set. A date-filtered run reports those messages as unresolved unless `--include-undated` is used. `--assume-timezone` gives an explicit interpretation to genuinely timezone-less dates.

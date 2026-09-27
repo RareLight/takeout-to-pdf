@@ -205,3 +205,21 @@ def test_pdf_attachment_links_survive_archive_relocation(tmp_path, mode):
     assert wanted.resolve() in resolved
     assert wanted.read_bytes() == b"portable evidence"
     assert verify_archive(new_root)["ok"]
+
+
+@pytest.mark.parametrize("mode", ["directory", "single-pdf"])
+def test_default_archive_is_created_beside_input_not_cwd(tmp_path, monkeypatch, mode):
+    source = make_box(tmp_path, [make_message("Sibling")])
+    other_directory = tmp_path / "working-directory"
+    other_directory.mkdir()
+    monkeypatch.chdir(other_directory)
+
+    result = export_archive(source, format=mode)
+
+    assert result.path.parent == source.parent
+    assert result.path.name.startswith("input__")
+    assert result.path != source
+    assert not (other_directory / "exports").exists()
+    entry = records(result.path)[0]
+    assert (result.path / entry["pdf_path"]).is_file()
+    assert verify_archive(result.path)["ok"]

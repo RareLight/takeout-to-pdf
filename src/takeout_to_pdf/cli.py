@@ -15,38 +15,40 @@ from .verify import verify_archive
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="takeout-to-pdf",
+        usage="%(prog)s MBOX [OPTIONS]",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Export the entire MBOX into an offline chronological archive by default.\n"
+            "Pass the MBOX file first. Export the entire MBOX by default into an\n"
+            "offline chronological archive.\n"
             "Directory mode writes one PDF per message, attachments beside it, and an\n"
-            "HTML index for browsing dates, people, labels, and conversations."
+            "HTML index for browsing dates, people, labels, and conversations.\n"
+            "A new archive directory is created beside the MBOX unless -o is given."
         ),
         epilog=(
             "Selection: repeated values of one filter are ORed; different filters are\n"
             "combined with AND. Addresses match exact mailboxes, case-insensitively.\n"
             "Date endpoints include the entire specified year, month, or day.\n\n"
             "Examples:\n"
-            "  takeout-to-pdf -i mail.mbox\n"
-            "  takeout-to-pdf -i mail.mbox -o exports/archive --compliance\n"
-            "  takeout-to-pdf -i mail.mbox --format single-pdf\n"
-            "  takeout-to-pdf -i mail.mbox --sender alice@example.com --label Project\n"
-            "  takeout-to-pdf -i mail.mbox --start-date 2005-12 --end-date 2007-06\n"
-            "  takeout-to-pdf -i mail.mbox --has-attachments\n"
+            "  takeout-to-pdf mail.mbox\n"
+            "  takeout-to-pdf mail.mbox -o exports/archive --compliance\n"
+            "  takeout-to-pdf mail.mbox --format single-pdf\n"
+            "  takeout-to-pdf mail.mbox --sender alice@example.com --label Project\n"
+            "  takeout-to-pdf mail.mbox --start-date 2005-12 --end-date 2007-06\n"
+            "  takeout-to-pdf mail.mbox --has-attachments\n"
             "  takeout-to-pdf verify exports/archive\n\n"
             "Use 'python main.py' in place of 'takeout-to-pdf' from this checkout."
         ),
     )
     result.add_argument("--version", action="version", version=__version__)
     output = result.add_argument_group("Input and output")
-    output.add_argument(
-        "-i", "--input", type=Path, required=True, metavar="MBOX", help="MBOX file to read"
-    )
+    output.add_argument("input", type=Path, nargs="?", metavar="MBOX", help="MBOX file to read")
+    output.add_argument("-i", "--input", dest="legacy_input", type=Path, help=argparse.SUPPRESS)
     output.add_argument(
         "-o",
         "--output",
         type=Path,
         metavar="DIR",
-        help="New archive directory (default: unique directory under ./exports); never overwrite",
+        help="New archive directory (default: uniquely named beside the MBOX); never overwrite",
     )
     output.add_argument(
         "--format",
@@ -160,6 +162,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report["ok"] else 1
     cli = parser()
     args = cli.parse_args(argv)
+    if args.input is None and args.legacy_input is None:
+        cli.error("MBOX is required as the first argument")
+    if args.input is not None and args.legacy_input is not None:
+        cli.error("Specify the MBOX once, either positionally or with -i/--input")
     if args.attachment_scope and not args.has_attachments:
         cli.error("--attachment-scope requires --has-attachments")
     filters = Filters(
@@ -176,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         result = export_archive(
-            args.input,
+            args.input or args.legacy_input,
             args.output,
             filters=filters,
             format=args.format,

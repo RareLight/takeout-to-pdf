@@ -1,6 +1,6 @@
 Implementation plan: reliable, browsable MBOX exports
 
-Implementation status (2026-09-27): The application and test infrastructure described here have been implemented in this working tree. This remains the original planning record; use README.md and docs/TESTING.md for the current command and output contract. The full 10,000-message render workload and remote CI platforms have not yet been validated.
+Implementation status (2026-09-27): The application and test infrastructure described here have been implemented in this working tree. The command now takes the MBOX as its first positional argument; `-i/--input` remains a compatibility alias. Without `-o`, the archive directory is created beside the input MBOX in both output modes. This remains the original planning record; use README.md and docs/TESTING.md for the current command and output contract. The full 10,000-message render workload and remote CI platforms have not yet been validated.
 
 Drafted 2026-09-27 against the original application and QUALITY_CONTROL.md. The phases and examples below describe the intended design as it stood before implementation; README.md documents the resulting interface.
 
@@ -22,12 +22,12 @@ Thread association will use References and In-Reply-To relationships to Message-
 
 2. Define the output contract.
 
-All exports create a new archive directory. `--output` names that directory; if it already exists, refuse to overwrite it. When omitted, create a collision-safe directory under `./exports/` using the input stem, UTC export timestamp, and a run identifier. The console prints the resulting index path and a concise reconciliation summary.
+All exports create a new archive directory. `--output` names that directory; if it already exists, refuse to overwrite it. When omitted, create a collision-safe directory beside the input MBOX using the input stem, UTC export timestamp, and a run identifier. The console prints the resulting index path and a concise reconciliation summary.
 
 Illustrative directory-mode output, with shortened IDs for readability:
 
 ```text
-exports/mail__2026-09-27T170000Z__r7c2/
+mail-folder/mail__2026-09-27T170000Z__r7c2/
   index.html
   README.txt
   manifest.json
@@ -66,11 +66,11 @@ In single-PDF mode, the archive root contains one generated `mail__<start>--<end
 
 3. Specify selection and CLI behavior.
 
-Keep `python main.py -i ...` working as a compatibility entrypoint. Add an installed `takeout-to-pdf` command. Preserve `-e/--email` as the participant filter, replacing substring matching with exact parsed-mailbox matching. The default change from combined PDF to directory output is intentional and prominently documented.
+Keep `python main.py ...` working as a compatibility entrypoint, including older `-i/--input` calls. Add an installed `takeout-to-pdf` command. Preserve `-e/--email` as the participant filter, replacing substring matching with exact parsed-mailbox matching. The default change from combined PDF to directory output is intentional and prominently documented.
 
 | Proposed option | Meaning |
 | --- | --- |
-| `-i, --input PATH` | Required existing MBOX; read-only; do not create missing inputs |
+| `MBOX` | First positional argument; required existing MBOX, read-only; legacy `-i/--input` remains accepted |
 | `-o, --output DIRECTORY` | New archive directory; refuse existing destinations |
 | `--format directory\|single-pdf` | Directory is the default |
 | `--compliance` | Additional technical records and verification; selection remains explicit |
@@ -102,13 +102,13 @@ Classify direction only when `--account-email` is supplied: own From = outgoing;
 Proposed examples:
 
 ```sh
-takeout-to-pdf -i takeout.mbox
-takeout-to-pdf -i takeout.mbox --format single-pdf -o exports/complete-mail
-takeout-to-pdf -i takeout.mbox --sender alice@example.com --label Project
-takeout-to-pdf -i takeout.mbox --start-date 2005-12 --end-date 2007-06
-takeout-to-pdf -i takeout.mbox --start-date 2012-01-22 --end-date 2017-09-09
-takeout-to-pdf -i takeout.mbox --recipient me@example.net --has-attachments
-takeout-to-pdf -i takeout.mbox --compliance --account-email me@example.net
+takeout-to-pdf takeout.mbox
+takeout-to-pdf takeout.mbox --format single-pdf -o exports/complete-mail
+takeout-to-pdf takeout.mbox --sender alice@example.com --label Project
+takeout-to-pdf takeout.mbox --start-date 2005-12 --end-date 2007-06
+takeout-to-pdf takeout.mbox --start-date 2012-01-22 --end-date 2017-09-09
+takeout-to-pdf takeout.mbox --recipient me@example.net --has-attachments
+takeout-to-pdf takeout.mbox --compliance --account-email me@example.net
 ```
 
 4. Make date semantics exact and testable.
