@@ -12,7 +12,8 @@ from urllib.parse import quote
 from .render import escape
 
 PAGE_SIZE = 200
-FACET_PREVIEW = 12
+FACET_PREVIEW = 24
+FACET_SHARD_SIZE = 60
 FILTER_SELECT_LIMIT = 100
 
 CSS = """
@@ -41,7 +42,9 @@ input, select, button { font: inherit; padding: .55rem .65rem; max-width: 100%; 
 .controls button { cursor: pointer; }
 .browse { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: .75rem; }
 .browse-group { margin: 0; padding: .8rem 1rem; border: 1px solid #d6e0e8; border-radius: .6rem; background: #fff; }
-.browse-group ul { max-height: 18rem; overflow: auto; margin-bottom: .2rem; }
+.browse-group ul { max-height: 28rem; overflow-y: auto; margin-bottom: .2rem; }
+.browse-group .browse-list { overscroll-behavior-y: contain; border: 1px solid #d6e0e8; border-radius: .4rem; background: #f9fbfd; padding: .4rem .6rem .4rem 1.9rem; }
+.browse-status { font-size: .88rem; }
 ul { padding-left: 1.25rem; }
 .table-wrap { overflow-x: auto; } .message-table { border-collapse: collapse; width: 100%; table-layout: fixed; }
 .message-table th, .message-table td { border-bottom: 1px solid #dbe3e9; text-align: left; padding: .85rem .7rem; vertical-align: top; overflow-wrap: anywhere; }
@@ -157,6 +160,72 @@ JS = """'use strict';
       document.head.appendChild(script);
     });
   }
+  function loadFacetShard(facet, index) {
+    return new Promise((resolve, reject) => {
+      const key = `${facet}-${String(index).padStart(4, '0')}`;
+      const script = document.createElement('script');
+      script.src = `assets/facet-${key}.js`;
+      script.onload = () => {
+        const items = window.archiveFacetShards?.[key];
+        if (window.archiveFacetShards) delete window.archiveFacetShards[key];
+        script.remove();
+        if (Array.isArray(items)) resolve(items);
+        else reject(new Error('Invalid category shard'));
+      };
+      script.onerror = () => { script.remove(); reject(new Error('Category shard unavailable')); };
+      document.head.appendChild(script);
+    });
+  }
+  function setupBrowse(group) {
+    const list = group.querySelector('.browse-list');
+    const status = group.querySelector('.browse-status');
+    const fallback = group.querySelector('.browse-fallback');
+    const facet = group.dataset.facet;
+    const total = Number(group.dataset.total);
+    const shardCount = Number(group.dataset.shards);
+    let nextShard = 1;
+    let loading = false;
+    let failed = false;
+    fallback.hidden = true;
+    async function loadNext() {
+      if (!group.open || loading || failed || nextShard > shardCount) return;
+      loading = true;
+      status.textContent = `Loading more ${facet}…`;
+      try {
+        const items = await loadFacetShard(facet, nextShard);
+        const fragment = document.createDocumentFragment();
+        for (const [label, tally, href] of items) {
+          const item = document.createElement('li');
+          const link = document.createElement('a');
+          link.href = href;
+          link.textContent = label;
+          const count = document.createElement('span');
+          count.className = 'muted';
+          count.textContent = ` (${tally})`;
+          item.append(link, count);
+          fragment.appendChild(item);
+        }
+        list.appendChild(fragment);
+        nextShard++;
+        status.textContent = nextShard > shardCount ? `Showing all ${total} categories.` :
+          `Showing ${list.children.length} of ${total} categories. Scroll inside this list for more.`;
+      } catch (error) {
+        failed = true;
+        status.textContent = 'More categories could not be loaded. Open the full list.';
+        fallback.hidden = false;
+      } finally {
+        loading = false;
+        if (!failed && nextShard <= shardCount && list.scrollHeight <= list.clientHeight + 8)
+          loadNext();
+      }
+    }
+    group.addEventListener('toggle', () => {
+      if (group.open && list.scrollHeight <= list.clientHeight + 8) loadNext();
+    });
+    list.addEventListener('scroll', () => {
+      if (list.scrollTop + list.clientHeight >= list.scrollHeight - 96) loadNext();
+    });
+  }
   async function search() {
     if (working) return;
     working = true;
@@ -203,6 +272,7 @@ JS = """'use strict';
       if (hasFilters(criteria())) requestSearch(true);
     }, 0);
   });
+  document.querySelectorAll('.browse-group[data-shards]').forEach(setupBrowse);
   form.hidden = false;
   showInitial();
 })();
@@ -215,6 +285,15 @@ def _filename(value: str) -> str:
     )[:48]
     digest = hashlib.sha256(value.encode()).hexdigest()[:16]
     return f"{readable or 'value'}__{digest}.html"
+
+
+def _script_json(value: object) -> str:
+    return (
+        json.dumps(value, ensure_ascii=True)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
 
 
 def _href(path: str, page: Path, root: Path, fragment: str = "") -> str:
@@ -513,6 +592,23 @@ def _write_catalog(root: Path, facet: str, items: list[tuple[str, int, str]]) ->
     return base
 
 
+def _write_facet_shards(root: Path, facet: str, items: list[tuple[str, int, str]]) -> int:
+    count = 0
+    for start in range(FACET_PREVIEW, len(items), FACET_SHARD_SIZE):
+        count += 1
+        key = f"{facet}-{count:04d}"
+        records = [
+            [value, item_count, _href(path, root / "index.html", root)]
+            for value, item_count, path in items[start : start + FACET_SHARD_SIZE]
+        ]
+        (root / "assets" / f"facet-{key}.js").write_text(
+            "window.archiveFacetShards = window.archiveFacetShards || {};\n"
+            f"window.archiveFacetShards[{json.dumps(key)}] = {_script_json(records)};\n",
+            encoding="utf-8",
+        )
+    return count
+
+
 def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool = False) -> None:
     """Write static facets and chronology, with body search that works on file:// URLs."""
     root = root.resolve()
@@ -563,15 +659,27 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
             f'{escape(value)}</a> <span class="muted">({count})</span></li>'
             for value, count, path in items[:FACET_PREVIEW]
         )
+        attributes = ""
+        list_attributes = ""
+        status = ""
+        fallback = ""
         if len(items) > FACET_PREVIEW:
             catalog = _write_catalog(root, facet, items)
-            preview += (
-                f'<li><a href="{escape(_href(catalog, root / "index.html", root))}">'
-                f"Browse all {len(items)} {title.lower()}</a></li>"
+            shards = _write_facet_shards(root, facet, items)
+            attributes = f' data-facet="{facet}" data-total="{len(items)}" data-shards="{shards}"'
+            list_attributes = f' class="browse-list" tabindex="0" aria-label="{title} categories"'
+            status = (
+                '<p class="browse-status muted" role="status" aria-live="polite">'
+                f"Showing {FACET_PREVIEW} of {len(items)} categories. "
+                "Scroll inside this list for more.</p>"
+            )
+            fallback = (
+                f'<p><a class="browse-fallback" href="{escape(_href(catalog, root / "index.html", root))}">'
+                f"Browse all {len(items)} {title.lower()}</a></p>"
             )
         browse.append(
-            f'<details class="browse-group"><summary>{title} ({len(groups)})</summary>'
-            f"<ul>{preview}</ul></details>"
+            f'<details class="browse-group"{attributes}><summary>{title} ({len(groups)})</summary>'
+            f"<ul{list_attributes}>{preview}</ul>{status}{fallback}</details>"
         )
     for path, group, issues in _threads(entries):
         title = f"Conversation: {group[0].get('subject', 'No subject')}"
@@ -622,12 +730,7 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
                 }
             )
         path = f"assets/search-{start // 500 + 1:04d}.js"
-        payload = (
-            json.dumps(records, ensure_ascii=True)
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("&", "\\u0026")
-        )
+        payload = _script_json(records)
         (root / path).write_text(
             "window.archiveSearchShards = window.archiveSearchShards || [];\n"
             f"window.archiveSearchShards.push({payload});\n",

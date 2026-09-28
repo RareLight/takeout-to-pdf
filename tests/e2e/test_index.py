@@ -140,8 +140,10 @@ def test_large_index_bounds_initial_page_and_keeps_static_navigation(tmp_path):
     assert "Synthetic message 200" in second
     assert "page-0002.html" in index
     assert "index.html" in second
+    assert len(index.encode()) < 200_000
     assert 'src="assets/archive.js"' in index
     assert 'src="assets/search-' not in index
+    assert 'src="assets/facet-' not in index
     assert "BODY_MARKER_200" in "".join(
         path.read_text() for path in (tmp_path / "assets").glob("search-*.js")
     )
@@ -152,6 +154,91 @@ def test_large_index_bounds_initial_page_and_keeps_static_navigation(tmp_path):
     assert catalog.count("<li>") == 200
     assert catalog_next.count("<li>") == 1
     assert list((tmp_path / "browse/recipients").glob("*page-0002.html"))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("basic", [False, True])
+def test_category_list_loads_more_on_scroll_without_scrolling_page(tmp_path, page, browser, basic):
+    entries = [
+        {
+            "id": f"m{index:03}",
+            "subject": f"Message {index}",
+            "date_utc": "2020-01-01T00:00:00+00:00",
+            "senders": [f"sender{index:03}@example.com"],
+            "recipients": ["reader@example.com"],
+            "labels": [],
+            "pdf_path": f"message-{index}.pdf",
+            "html_path": f"message-{index}.html",
+            "body_text": "body",
+            "attachments": [],
+            "message_id": f"<m{index}@example.com>",
+            "references": [],
+        }
+        for index in range(85)
+    ]
+    unsafe_sender = 'zz<img src="https://example.com/tracker" onerror="alert(1)">'
+    entries[-1]["senders"] = [unsafe_sender]
+    write_index(tmp_path, entries, {"status": "complete"}, basic=basic)
+    index = (tmp_path / "index.html").read_text()
+    assert (
+        len(BeautifulSoup(index, "html.parser").select('details[data-facet="senders"] ul li')) == 24
+    )
+    assert (tmp_path / "assets/facet-senders-0001.js").is_file()
+
+    loaded = []
+    dialogs = []
+    page.on(
+        "request",
+        lambda request: loaded.append(request.url) if "facet-senders" in request.url else None,
+    )
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+    page.goto((tmp_path / "index.html").as_uri())
+    group = page.locator('details.browse-group[data-facet="senders"]')
+    listing = group.locator("ul")
+    assert listing.locator("li").count() == 24
+    assert not loaded
+    group.locator("summary").click()
+    expect(listing).to_have_css("overscroll-behavior-y", "contain")
+    assert listing.evaluate("element => element.clientHeight") > 350
+    assert group.get_by_role("link", name="Browse all 85 senders").is_hidden()
+    listing.evaluate("element => { element.scrollTop = element.scrollHeight; }")
+    expect(listing.locator("li")).to_have_count(84)
+    listing.evaluate("element => { element.scrollTop = element.scrollHeight; }")
+    expect(listing.locator("li")).to_have_count(85)
+    assert loaded and len(loaded) == 2
+    last = group.get_by_role("link", name=unsafe_sender)
+    assert last.is_visible()
+    assert (tmp_path / last.get_attribute("href")).is_file()
+    assert page.locator("img").count() == 0
+    assert not dialogs
+    listing.scroll_into_view_if_needed()
+    bounds = listing.bounding_box()
+    assert bounds is not None
+    page.mouse.move(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
+    before = page.evaluate("window.scrollY")
+    page.mouse.wheel(0, 500)
+    page.wait_for_timeout(100)
+    assert page.evaluate("window.scrollY") == before
+
+    no_js_context = browser.new_context(java_script_enabled=False)
+    no_js_page = no_js_context.new_page()
+    no_js_page.goto((tmp_path / "index.html").as_uri())
+    no_js_group = no_js_page.locator('details.browse-group[data-facet="senders"]')
+    no_js_group.locator("summary").click()
+    no_js_group.get_by_role("link", name="Browse all 85 senders").click()
+    assert no_js_page.get_by_role("link", name=unsafe_sender).is_visible()
+    no_js_context.close()
+
+    (tmp_path / "assets/facet-senders-0001.js").unlink()
+    missing_context = browser.new_context()
+    missing_page = missing_context.new_page()
+    missing_page.goto((tmp_path / "index.html").as_uri())
+    missing_group = missing_page.locator('details.browse-group[data-facet="senders"]')
+    missing_group.locator("summary").click()
+    missing_group.locator("ul").evaluate("element => { element.scrollTop = element.scrollHeight; }")
+    expect(missing_group.get_by_role("link", name="Browse all 85 senders")).to_be_visible()
+    expect(missing_group.locator(".browse-status")).to_contain_text("could not be loaded")
+    missing_context.close()
 
 
 @pytest.mark.browser
