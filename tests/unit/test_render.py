@@ -26,6 +26,38 @@ def test_html_sanitization_preserves_content_and_reports_external_image(tmp_path
     assert "&lt;script&gt;metadata()&lt;/script&gt;" in result
 
 
+def test_basic_omits_external_image_notices_but_preserves_other_image_issues(tmp_path):
+    record = MessageRecord(
+        bodies=[
+            BodyPart(
+                "text/html",
+                '<p>Before</p><img src="https://remote.test/pixel" alt="remote">'
+                '<img src="../../untrusted.png" alt="untrusted">'
+                '<img src="cid:missing" alt="inline"><p>After</p>',
+                "1",
+            )
+        ]
+    )
+    basic_html, basic_issues = render_message(record, {"id": "m1"}, tmp_path, basic=True)
+    assert "Before" in basic_html and "After" in basic_html
+    assert "remote.test" not in basic_html
+    assert "untrusted.png" not in basic_html
+    assert "Unavailable external or untrusted image resource" not in basic_html
+    assert all(
+        "Unavailable external or untrusted image resource" not in issue for issue in basic_issues
+    )
+    assert "Inline image Content-ID missing or ambiguous" in basic_html
+    assert any("Inline image Content-ID missing or ambiguous" in issue for issue in basic_issues)
+
+    for compliance in (False, True):
+        html, issues = render_message(record, {"id": "m1"}, tmp_path, compliance=compliance)
+        assert "Unavailable external or untrusted image resource" in html
+        assert (
+            sum("Unavailable external or untrusted image resource" in issue for issue in issues)
+            == 2
+        )
+
+
 def test_alternatives_and_full_repeated_headers_are_visible(tmp_path):
     record = MessageRecord(
         headers=[("Received", "first"), ("Received", "second")],

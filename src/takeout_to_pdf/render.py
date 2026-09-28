@@ -85,11 +85,12 @@ def _raster(path: Path) -> str:
 class _Resources(HTMLParser):
     """Rewrite only sanitized markup; original message paths are never trusted."""
 
-    def __init__(self, attachments: list[dict], directory: Path, asset_root: Path):
+    def __init__(self, attachments: list[dict], directory: Path, asset_root: Path, basic: bool):
         super().__init__(convert_charrefs=False)
         self.attachments = attachments
         self.directory = directory
         self.asset_root = asset_root
+        self.basic = basic
         self.output: list[str] = []
         self.issues: list[str] = []
 
@@ -115,6 +116,8 @@ class _Resources(HTMLParser):
                 else:
                     self.issues.append(f"Inline image Content-ID missing or ambiguous: {cid}")
             else:
+                if self.basic:
+                    return
                 self.issues.append(
                     f"Unavailable external or untrusted image resource: {source or 'unspecified URL'}"
                 )
@@ -143,7 +146,7 @@ class _Resources(HTMLParser):
 
 
 def _sanitized(
-    content: str, attachments: list[dict], directory: Path, asset_root: Path
+    content: str, attachments: list[dict], directory: Path, asset_root: Path, basic: bool
 ) -> tuple[str, list[str]]:
     def attribute_filter(tag: str, attribute: str, value: str) -> str | None:
         if tag == "a" and attribute == "href":
@@ -211,7 +214,7 @@ def _sanitized(
         url_schemes={"https", "http", "mailto", "cid"},
         attribute_filter=attribute_filter,
     )
-    resources = _Resources(attachments, directory, asset_root)
+    resources = _Resources(attachments, directory, asset_root, basic)
     resources.feed(cleaned)
     resources.close()
     return "".join(resources.output), resources.issues
@@ -255,7 +258,7 @@ def render_message(
         )
         if body.content_type == "text/html":
             content, warnings = _sanitized(
-                body.content, attachments, directory, asset_root or directory
+                body.content, attachments, directory, asset_root or directory, basic
             )
             issues.extend(warnings)
         else:

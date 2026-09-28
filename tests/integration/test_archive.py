@@ -98,6 +98,28 @@ def test_basic_export_has_readable_pdfs_attachments_and_browse_views(tmp_path):
     assert verify_archive(result.path)["ok"]
 
 
+def test_basic_external_image_notice_is_absent_from_pdf_and_issue_log(tmp_path):
+    message = make_message("Remote image")
+    message.add_alternative(
+        '<p>Useful text</p><img src="https://remote.test/pixel" alt="tracker">',
+        subtype="html",
+    )
+    source = make_box(tmp_path, [message])
+
+    result = export_archive(source, tmp_path / "basic", basic=True)
+    entry = records(result.path)[0]
+    pdf_text = " ".join(
+        page.extract_text() for page in PdfReader(result.path / entry["pdf_path"]).pages
+    )
+    assert result.status == 0
+    assert "Useful text" in pdf_text
+    assert "Image unavailable" not in pdf_text
+    assert "Unavailable external or untrusted image resource" not in pdf_text
+    assert (result.path / "issues.jsonl").read_text() == ""
+    assert not entry["issues"]
+    assert verify_archive(result.path)["ok"]
+
+
 def test_basic_failed_pdf_keeps_no_message_html(tmp_path, monkeypatch):
     from takeout_to_pdf import archive
 
