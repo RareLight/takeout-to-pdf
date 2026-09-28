@@ -171,7 +171,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         verifier.add_argument("archive", type=Path, help="Completed export directory to check")
         args = verifier.parse_args(argv[1:])
-        report = verify_archive(args.archive)
+        report = verify_archive(
+            args.archive, progress=lambda message: print(message, file=sys.stderr, flush=True)
+        )
         print(json.dumps(report, indent=2))
         return 0 if report["ok"] else 1
     started = monotonic()

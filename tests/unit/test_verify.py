@@ -91,6 +91,22 @@ def test_valid_archive_and_verifier_is_read_only(archive):
     assert before == {p.name: p.read_bytes() for p in archive.iterdir()}
 
 
+def test_checksum_and_verification_progress_preserve_integrity(archive):
+    updates = []
+    write_checksums(archive, progress=updates.append)
+    total = len((archive / "checksums.sha256").read_text().splitlines())
+    assert f"Hashing archive files: {total:,} / {total:,}" in updates
+
+    updates.clear()
+    assert verify_archive(archive, progress=updates.append)["ok"]
+    assert f"Checking file checksums: {total:,} / {total:,}" in updates
+    assert "Checking message records: 1 / 1" in updates
+    assert "Checking HTML links: 2 / 2" in updates
+
+    (archive / "message.eml").write_bytes(b"changed body")
+    assert not verify_archive(archive, progress=updates.append)["ok"]
+
+
 def test_eml_hash_reconciles_even_when_checksums_are_rewritten(archive):
     (archive / "message.eml").write_bytes(b"changed body")
     write_checksums(archive)

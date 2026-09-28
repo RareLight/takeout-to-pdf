@@ -133,6 +133,15 @@ def test_cli_reports_total_processing_time(source, tmp_path, monkeypatch, capsys
     assert "Total processing time: 01:40:05" in capsys.readouterr().out
 
 
+def test_cli_verify_reports_progress_without_corrupting_json(source, tmp_path, capsys):
+    result = export_archive(source, tmp_path / "archive")
+    assert main(["verify", str(result.path)]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["ok"] is True
+    assert "Checking file checksums:" in captured.err
+    assert "Checking message records:" in captured.err
+
+
 def test_cli_rejects_missing_or_duplicate_input(source, tmp_path, capsys):
     with pytest.raises(SystemExit) as missing:
         main([])

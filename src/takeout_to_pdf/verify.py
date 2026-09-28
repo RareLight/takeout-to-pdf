@@ -2,7 +2,9 @@
 
 import json
 import posixpath
+import time
 from collections import Counter
+from collections.abc import Callable
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -15,8 +17,27 @@ from .paths import contained_file, hash_file, sha256
 from .source import read_record
 
 
-def write_checksums(root: Path) -> None:
-    lines = []
+class _Progress:
+    def __init__(self, callback: Callable[[str], None] | None) -> None:
+        self.callback = callback
+        self.last_update = 0.0
+
+    def update(
+        self, phase: str, completed: int, total: int | None = None, *, force: bool = False
+    ) -> None:
+        if self.callback is None:
+            return
+        now = time.monotonic()
+        if not (force or completed == 0 or completed == total or now - self.last_update >= 5):
+            return
+        count = f"{completed:,} / {total:,}" if total is not None else f"{completed:,} paths"
+        self.callback(f"{phase}: {count}")
+        self.last_update = now
+
+
+def write_checksums(root: Path, *, progress: Callable[[str], None] | None = None) -> None:
+    reporter = _Progress(progress)
+    files = []
     for path in sorted(root.rglob("*")):
         if path.is_symlink():
             raise ValueError(f"Cannot checksum archive symlink: {path.relative_to(root)}")
@@ -24,7 +45,12 @@ def write_checksums(root: Path) -> None:
             relative = path.relative_to(root).as_posix()
             if "\n" in relative or "\r" in relative:
                 raise ValueError("Cannot checksum a filename containing newlines")
-            lines.append(f"{hash_file(path)}  {relative}\n")
+            files.append((path, relative))
+    lines = []
+    reporter.update("Hashing archive files", 0, len(files))
+    for count, (path, relative) in enumerate(files, 1):
+        lines.append(f"{hash_file(path)}  {relative}\n")
+        reporter.update("Hashing archive files", count, len(files))
     contained_file(root, "checksums.sha256").write_text("".join(lines), encoding="utf-8")
 
 
@@ -56,8 +82,9 @@ class _Links(HTMLParser):
                 self.links.append((tag, name, value))
 
 
-def verify_archive(root: Path) -> dict[str, Any]:
+def verify_archive(root: Path, *, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     root = Path(root).absolute()
+    reporter = _Progress(progress)
     errors: list[str] = []
     expected: dict[str, str] = {}
     unexpected: list[str] = []
@@ -86,9 +113,11 @@ def verify_archive(root: Path) -> dict[str, Any]:
     try:
         if root.is_symlink():
             raise ValueError("Archive root must not be a symlink")
-        for line in (
+        checksum_lines = (
             contained_file(root, "checksums.sha256").read_text(encoding="utf-8").splitlines()
-        ):
+        )
+        reporter.update("Checking file checksums", 0, len(checksum_lines))
+        for count, line in enumerate(checksum_lines, 1):
             digest, relative = line.split("  ", 1)
             if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
                 raise ValueError("Invalid checksum digest")
@@ -102,12 +131,18 @@ def verify_archive(root: Path) -> dict[str, Any]:
                 errors.append(f"Missing file: {relative}")
             elif hash_file(path) != digest:
                 errors.append(f"Modified file: {relative}")
+            reporter.update("Checking file checksums", count, len(checksum_lines))
+        reporter.update("Checking for unexpected paths", 0)
+        scanned = 0
         for path in root.rglob("*"):
+            scanned += 1
             relative = path.relative_to(root).as_posix()
             if path.is_symlink():
                 errors.append(f"Unexpected symlink: {relative}")
             elif path.is_file() and relative not in expected and relative != "checksums.sha256":
                 unexpected.append(relative)
+            reporter.update("Checking for unexpected paths", scanned)
+        reporter.update("Checking for unexpected paths", scanned, force=True)
         for required in (
             "manifest.json",
             "messages.jsonl",
@@ -183,11 +218,14 @@ def verify_archive(root: Path) -> dict[str, Any]:
         source_copy = None
         if manifest.get("source_copy"):
             source_copy = reference(manifest["source_copy"], "source copy")
-            if source_copy and (
-                source_copy.stat().st_size != source_size
-                or hash_file(source_copy) != source_metadata["sha256"]
-            ):
-                errors.append("Source copy size/hash mismatch")
+            if source_copy:
+                reporter.update("Checking compliance source copy", 0, 1)
+                if (
+                    source_copy.stat().st_size != source_size
+                    or hash_file(source_copy) != source_metadata["sha256"]
+                ):
+                    errors.append("Source copy size/hash mismatch")
+                reporter.update("Checking compliance source copy", 1, 1)
         elif manifest.get("compliance"):
             filters = _object(manifest.get("filters", {}), "filters")
             if not any(
@@ -205,7 +243,8 @@ def verify_archive(root: Path) -> dict[str, Any]:
                 errors.append("Unfiltered compliance archive is missing its source copy")
         basic_message_files: set[str] = set()
         basic_pdf_paths: set[str] = set()
-        for record in records:
+        reporter.update("Checking message records", 0, len(records))
+        for count, record in enumerate(records, 1):
             identifier = record["id"]
             start = _integer(record["source_start"], "message.source_start")
             end = _integer(record["source_end"], "message.source_end")
@@ -297,6 +336,7 @@ def verify_archive(root: Path) -> dict[str, Any]:
                             errors.append(
                                 f"Compliance metadata {key} differs from message record: {identifier}"
                             )
+            reporter.update("Checking message records", count, len(records))
         if basic:
             for relative in expected:
                 if relative.startswith("messages/") and relative not in basic_message_files:
@@ -308,9 +348,11 @@ def verify_archive(root: Path) -> dict[str, Any]:
         html_paths = {
             name for name in expected if name.endswith(".html") and name not in attachment_paths
         }
-        for relative in html_paths:
+        reporter.update("Checking HTML links", 0, len(html_paths))
+        for count, relative in enumerate(html_paths, 1):
             page = reference(relative, "HTML reading view")
             if not page:
+                reporter.update("Checking HTML links", count, len(html_paths))
                 continue
             parser = _Links()
             parser.feed(page.read_text(encoding="utf-8"))
@@ -334,6 +376,7 @@ def verify_archive(root: Path) -> dict[str, Any]:
                     pdf_page(
                         target, int(link.fragment.removeprefix("page=")), f"link from {relative}"
                     )
+            reporter.update("Checking HTML links", count, len(html_paths))
     except (OSError, ValueError, KeyError, TypeError, AttributeError, PdfReadError) as exc:
         errors.append(f"Invalid archive: {exc}")
     if unexpected:

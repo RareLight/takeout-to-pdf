@@ -1036,13 +1036,14 @@ def export_archive(
         shutil.rmtree(work)
         (stage / "INCOMPLETE.txt").unlink()
         reporter.stage("Writing archive checksums")
-        write_checksums(stage)
+        write_checksums(stage, progress=reporter.stage)
         reporter.stage("Verifying archive files and references")
-        verification = verify_archive(stage)
+        verification = verify_archive(stage, progress=reporter.stage)
         if not verification["ok"]:
             raise RuntimeError(f"Archive verification failed: {verification['errors']}")
         _json(stage / "verification.json", verification)
-        write_checksums(stage)
+        reporter.stage("Finalizing archive checksums")
+        write_checksums(stage, progress=reporter.stage)
         if output.exists() or output.is_symlink():
             raise RuntimeError("Output destination appeared during export; refusing overwrite")
         reporter.stage(f"Publishing completed archive to {output}")
