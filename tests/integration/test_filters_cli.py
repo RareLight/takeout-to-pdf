@@ -150,3 +150,87 @@ def test_cli_default_output_is_sibling_of_input(source, tmp_path, monkeypatch, c
     assert archive.parent == source.parent
     assert (archive / "index.html").is_file()
     assert not (elsewhere / "exports").exists()
+
+
+def test_cli_reports_retained_stage_path_on_interrupt(source, tmp_path, monkeypatch, capsys):
+    from takeout_to_pdf.archive import ExportInterrupted
+
+    stage = tmp_path / ".archive.incomplete-test"
+    stage.mkdir()
+
+    def fake_export(*args, **kwargs):
+        kwargs["progress"]("Scanning and selecting messages from 1.0 KiB")
+        raise ExportInterrupted(stage)
+
+    monkeypatch.setattr("takeout_to_pdf.cli.export_archive", fake_export)
+    assert main([str(source), "-o", str(tmp_path / "archive")]) == 3
+    captured = capsys.readouterr()
+    assert "Scanning and selecting" in captured.err
+    assert str(stage) in captured.err
+    assert captured.out == ""
+
+
+def test_cli_interrupt_before_staging_uses_generic_message(source, tmp_path, monkeypatch, capsys):
+    from takeout_to_pdf.archive import ExportInterrupted
+
+    def fake_export(*args, **kwargs):
+        raise ExportInterrupted(None)
+
+    monkeypatch.setattr("takeout_to_pdf.cli.export_archive", fake_export)
+    assert main([str(source), "-o", str(tmp_path / "archive")]) == 3
+    captured = capsys.readouterr()
+    assert "Export interrupted" in captured.err
+    assert "retained at" not in captured.err
+    assert captured.out == ""
+
+
+def test_cli_reports_renderer_failure_without_staging_claim(source, tmp_path, monkeypatch, capsys):
+    from takeout_to_pdf.archive import RendererUnavailable
+
+    def fake_export(*args, **kwargs):
+        kwargs["progress"]("Checking PDF renderer dependencies")
+        raise RendererUnavailable(
+            "PDF renderer dependency check failed before processing any messages."
+        )
+
+    monkeypatch.setattr("takeout_to_pdf.cli.export_archive", fake_export)
+    assert main([str(source), "-o", str(tmp_path / "archive")]) == 3
+    captured = capsys.readouterr()
+    assert "PDF renderer dependency check failed" in captured.err
+    assert "staging" not in captured.err
+    assert captured.out == ""
+    assert not (tmp_path / "archive").exists()
+
+
+def test_cli_help_and_verify_never_preflight(tmp_path, monkeypatch, capsys):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("export must not run")
+
+    monkeypatch.setattr("takeout_to_pdf.cli.export_archive", forbidden)
+    with pytest.raises(SystemExit) as outcome:
+        main(["--help"])
+    assert outcome.value.code == 0
+    capsys.readouterr()
+    assert main(["verify", str(tmp_path / "missing-archive")]) == 1
+
+
+def test_cli_reports_published_archive_on_post_publish_interrupt(
+    source, tmp_path, monkeypatch, capsys
+):
+    from takeout_to_pdf import archive
+
+    real_publish = archive.publish_directory
+
+    def interrupt(stage, destination):
+        real_publish(stage, destination)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(archive, "publish_directory", interrupt)
+    output = tmp_path / "archive"
+    assert main([str(source), "-o", str(output)]) == 3
+    captured = capsys.readouterr()
+    assert f"already published at {output}" in captured.err
+    assert "Incomplete staging retained at" not in captured.err
+    assert captured.out == ""
+    assert (output / "index.html").is_file()
+    assert not (output / "INCOMPLETE.txt").exists()

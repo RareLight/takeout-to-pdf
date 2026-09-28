@@ -12,7 +12,7 @@ from email import policy
 from email.errors import HeaderParseError
 from email.header import decode_header
 from email.message import Message
-from email.parser import BytesParser, HeaderParser
+from email.parser import BytesHeaderParser, BytesParser, HeaderParser
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import unquote
@@ -182,14 +182,8 @@ def _addresses(values: list[str], field: str, record: MessageRecord) -> list[str
     return list(dict.fromkeys(addresses))
 
 
-def parse_message(eml: bytes) -> MessageRecord:
-    """Extract all parts; ``alternative`` marks secondary reading representations.
-
-    Full source fidelity is provided by the caller's EML/raw record. Decoding
-    failures keep encoded payload bytes, never a silently repaired attachment.
-    """
+def _header_fields(message: Message) -> MessageRecord:
     record = MessageRecord()
-    message = BytesParser(policy=policy.compat32).parsebytes(eml)
     values: dict[str, list[str]] = {}
     for name, raw_value in message.raw_items():
         before_issues = len(record.issues)
@@ -233,6 +227,36 @@ def parse_message(eml: bytes) -> MessageRecord:
     )
     if "content-length" in values:
         _issue(record, "Content-Length framing is not used; verify source is mboxo/mboxrd")
+    return record
+
+
+_HEADER_PREVIEW_BYTES = 64 * 1024
+
+
+def parse_headers(eml: bytes) -> MessageRecord | None:
+    positions = [
+        (position, len(marker))
+        for marker in (b"\n\n", b"\r\n\r\n")
+        if (position := eml.find(marker, 0, _HEADER_PREVIEW_BYTES)) != -1
+    ]
+    if not positions:
+        return None
+    end, marker_length = min(positions)
+    message = BytesHeaderParser(policy=policy.compat32).parsebytes(eml[: end + marker_length])
+    record = _header_fields(message)
+    if message.defects or record.issues or record.uncertain_fields:
+        return None
+    return record
+
+
+def parse_message(eml: bytes) -> MessageRecord:
+    """Extract all parts; ``alternative`` marks secondary reading representations.
+
+    Full source fidelity is provided by the caller's EML/raw record. Decoding
+    failures keep encoded payload bytes, never a silently repaired attachment.
+    """
+    message = BytesParser(policy=policy.compat32).parsebytes(eml)
+    record = _header_fields(message)
 
     def visit(part: Message, raw: bytes, path: str, related: bool = False) -> None:
         content_type = _header(part.get_content_type(), record, f"MIME {path} content type")

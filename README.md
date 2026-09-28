@@ -15,6 +15,8 @@ uv run takeout-to-pdf --help
 
 The locked test tools are available with `uv sync --locked --group dev`. Pass the MBOX as the first argument, followed by any options. The compatibility entrypoint `uv run python main.py input.mbox` is also supported; existing `-i/--input` commands still work. `uv.lock` and `pyproject.toml` are tracked so a clean checkout has reproducible Python dependencies. No network access is needed to open a completed archive.
 
+Every export first renders a tiny synthetic PDF to check the native renderer dependencies, before reading any mail, and fails early with setup instructions if they are missing. Run `uv run --locked python -m takeout_to_pdf.render_worker --check` to diagnose the same check directly; nothing is installed or configured automatically.
+
 ## Export
 
 ```sh
@@ -34,7 +36,9 @@ uv run takeout-to-pdf takeout.mbox --compliance -o exports/compliance
 uv run takeout-to-pdf verify exports/client-mail
 ```
 
-The tool never overwrites an existing archive. Without `-o`, it creates a uniquely named archive directory beside the input MBOX, regardless of the current working directory or output format. In single-PDF mode, the combined PDF and its separate attachments are inside that sibling directory. An interrupted or fatal run leaves an explicitly marked incomplete staging directory. Do not treat that directory as a completed export.
+The tool never overwrites an existing archive. Without `-o`, it creates a uniquely named archive directory beside the input MBOX, regardless of the current working directory or output format. In single-PDF mode, the combined PDF and its separate attachments are inside that sibling directory. Export progress and phase updates print to stderr. Before publication, an interrupted or fatal run retains any created staging directory marked incomplete; on Ctrl-C its retained path is printed to stderr. If the interrupt lands after publication, the already-published archive path is reported instead. Do not treat an incomplete staging directory as a completed export.
+
+PDF rendering uses four worker processes by default. Set `--render-workers N` to control parallel rendering and memory use; `--render-timeout SECONDS` limits each PDF render.
 
 Example directory layout for `mail-folder/takeout.mbox`:
 
@@ -94,6 +98,8 @@ uv run pytest tests/integration tests/e2e tests/visual
 ```
 
 Browser tests use Playwright Chromium (`uv run playwright install chromium`); PDF visual tests require the rendering dependencies above. CI runs the supported Python matrix and the test layers described in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). [QUALITY_CONTROL.md](QUALITY_CONTROL.md) contains the initial defect review. Tests use synthetic mail, not personal Takeout files.
+
+Keep real mail and exports outside the checkout: `.gitignore` covers mailboxes, generated archive ledgers, environment files, and OS/build artifacts, and every new export embeds an ignore-all `.gitignore` so a custom `-o` location inside another Git repository stays protected too. `python3 scripts/check_data.py` rejects tracked files matching any ignore rule — including files added with `git add -f` — reporting only paths; it runs first in `python3 scripts/check.py` and in CI, and can be run before committing. This protection is based on filenames and ignore rules, not content scanning or history cleanup, and cannot prevent a deliberate bypass.
 
 ## Limits
 

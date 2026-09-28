@@ -63,6 +63,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --locked --dev
+      - run: uv run --locked python scripts/check_data.py
       - run: uv run --locked ruff format --check .
       - run: uv run --locked ruff check .
       - run: uv run --locked mypy src

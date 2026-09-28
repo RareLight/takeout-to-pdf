@@ -6,7 +6,10 @@ dependencies. A changed dependency declaration must be accompanied by a reviewed
 `uv.lock` update. CI uses uv 0.11.7 and Python 3.10, 3.12, and 3.14.
 
 Use synthetic mail in tests and uploaded artifacts. Do not put personal Takeout
-archives, credentials, or private attachments in fixtures or CI output.
+archives, credentials, or private attachments in fixtures or CI output. Keep
+real mailboxes and exports outside the checkout entirely; the `data` gate and
+ignore rules are filename-based guards, not content scanning, and cannot prevent
+a deliberate forced-add bypass.
 
 ## Iterative development
 
@@ -22,9 +25,11 @@ uv run --locked pytest tests/unit/test_dates.py -q
 python3 scripts/check.py
 ```
 
-The check script runs formatting, linting, types, unit/property tests with branch
-coverage, integration, Chromium E2E, and visual tests in that order. It stops at
-the first failure. Run a subset with `python3 scripts/check.py unit integration`,
+The check script runs the source-control safety gate, formatting, linting,
+types, unit/property tests with branch coverage, integration, Chromium E2E, and
+visual tests in that order. It stops at the first failure. Run a subset with
+`python3 scripts/check.py unit integration`, the safety gate alone with
+`python3 scripts/check.py data`,
 or select a different browser with `python3 scripts/check.py e2e --browser firefox`.
 Use `python3 scripts/check.py performance` for the extended benchmark suite.
 Install the renderer and browser dependencies below before the final three gates.
@@ -73,7 +78,13 @@ uv run --locked python -m weasyprint --info
 
 Use `uv run --locked python -m weasyprint --info` on every platform to confirm
 library discovery. Font availability affects pagination; installation success
-alone does not establish equivalent rendering.
+alone does not establish equivalent rendering. Exports additionally render and
+read back a tiny synthetic PDF before reading the mailbox — a stronger check
+than `--info`, which only reports library discovery;
+`uv run --locked python -m takeout_to_pdf.render_worker --check` runs that
+exact check directly to diagnose a broken native setup without touching any
+input data, but it does not install or change anything — the platform setup
+above is still required.
 
 ## Offline browser and extended checks
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GATES = {
+    "data": ["python", "scripts/check_data.py"],
     "format": ["ruff", "format", "--check", "."],
     "lint": ["ruff", "check", "."],
     "types": ["mypy", "src"],
@@ -18,7 +19,7 @@ GATES = {
     "visual": ["pytest", "tests/visual"],
     "performance": ["pytest", "tests/performance", "--durations=0"],
 }
-ORDER = ("format", "lint", "types", "unit", "integration", "e2e", "visual")
+ORDER = ("data", "format", "lint", "types", "unit", "integration", "e2e", "visual")
 
 
 def main(argv: list[str] | None = None) -> int:

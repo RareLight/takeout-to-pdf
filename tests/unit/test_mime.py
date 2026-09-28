@@ -4,7 +4,7 @@ from email.policy import SMTP
 from hypothesis import given
 from hypothesis import strategies as st
 
-from takeout_to_pdf.mime import parse_message
+from takeout_to_pdf.mime import parse_headers, parse_message
 
 
 def test_empty_plain_alternative_does_not_hide_html():
@@ -244,3 +244,81 @@ def test_malformed_mime_metadata_is_utf8_serializable(prefix, value):
 
     record = parse_message(prefix + value + b"\n\nbody")
     json.dumps(record.mime_inventory, ensure_ascii=False).encode("utf-8", "strict")
+
+
+def _header_snapshot(record):
+    return {
+        "subject": record.subject,
+        "date_raw": record.date_raw,
+        "senders": record.senders,
+        "recipients": record.recipients,
+        "labels": record.labels,
+        "message_id": record.message_id,
+        "references": record.references,
+        "headers": record.headers,
+        "from_display": record.from_display,
+        "to_display": record.to_display,
+        "cc_display": record.cc_display,
+        "bcc_display": record.bcc_display,
+    }
+
+
+def test_parse_headers_matches_full_parse_metadata():
+    cases = [
+        b"From: Alice <alice@example.com>\nTo: bob@example.net\nSubject: plain\n"
+        b"Date: Tue, 01 Sep 2026 12:00:00 +0000\nMessage-ID: <m1@example.com>\n\nbody",
+        b'From: "Alice" <Alice@example.com>\r\n'
+        b'To: Group: "Bob" <bob@example.com>, Other <other@example.com>;\r\n'
+        b"To: extra@example.com\r\nCc: cc@example.com\r\nBcc: hidden@example.com\r\n"
+        b'X-Gmail-Labels: Inbox,"Project, A",Parent/Child\r\n'
+        b"X-Gmail-Labels: =?utf-8?b?UHLDvGZ1bmc=?=\r\n"
+        b"Subject: =?utf-8?q?caf=C3=A9?=\r\nReferences: <a@x> <b@y>\r\n\r\nbody",
+        b"Subject: folded\r\n\theader continuation\r\n"
+        b"From: a@example.com\r\nX-Custom: one\r\nX-Custom: two\r\n\r\nbody",
+    ]
+    for raw in cases:
+        preview = parse_headers(raw)
+        assert preview is not None
+        assert _header_snapshot(preview) == _header_snapshot(parse_message(raw))
+        assert preview.bodies == []
+        assert preview.attachments == []
+        assert preview.mime_inventory == []
+
+
+def test_parse_headers_falls_back_on_missing_or_uncertain_headers():
+    assert parse_headers(b"") is None
+    assert parse_headers(b"unterminated header with no separator") is None
+    assert parse_headers(b"From: a@b.com\rSubject: x\r\rbody") is None
+    assert parse_headers(b"not a header line\n\nbody") is None
+    assert parse_headers(b"From: not an address\n\nbody") is None
+    assert parse_headers(b"From: =?unknown?q?Alice?= <alice@example.com>\n\nbody") is None
+    assert (
+        parse_headers(
+            b"From: a@b.com\n"
+            b"Date: Tue, 01 Sep 2026 12:00:00 +0000\n"
+            b"Date: Tue, 02 Sep 2026 12:00:00 +0000\n\nbody"
+        )
+        is None
+    )
+    padded = b"X-Pad: " + b"x" * (64 * 1024) + b"\n\nbody"
+    assert parse_headers(padded) is None
+
+
+def test_parse_headers_never_decodes_payloads(monkeypatch):
+    payload = b"ZmFrZSBwYXlsb2Fk\n" * 4096
+    raw = (
+        b"From: alice@example.com\nSubject: binary\n"
+        b"Content-Type: application/octet-stream\nContent-Transfer-Encoding: base64\n"
+        b'Content-Disposition: attachment; filename="big.bin"\n\n' + payload
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("header pass must not decode payloads")
+
+    monkeypatch.setattr("takeout_to_pdf.mime._decode", forbidden)
+    record = parse_headers(raw)
+    assert record is not None
+    assert record.subject == "binary"
+    assert record.bodies == []
+    assert record.attachments == []
+    assert record.mime_inventory == []

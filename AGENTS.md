@@ -28,6 +28,7 @@
 
 ## Testing Strategy
 
+- Testing mode: autonomous. Run the verification chain on changes; routine validation is delegated to the agent.
 - Baseline First: Run all unit tests before implementing. Fix any existing failures.
 - Unit Tests for: Specific input/output pairs, edge cases, error paths.
 - Property-Based Tests for: Invariants, commutativity, idempotency, round-trip serialization.

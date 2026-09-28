@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfoNotFoundError
 
 from . import __version__
-from .archive import export_archive
+from .archive import ExportInterrupted, RendererUnavailable, export_archive
 from .filters import Filters
 from .verify import verify_archive
 
@@ -144,6 +144,13 @@ def parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="Maximum seconds for each message PDF (default: 120); failures are reported",
     )
+    presentation.add_argument(
+        "--render-workers",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Persistent PDF renderer worker processes (default: 4); each needs renderer memory",
+    )
     return result
 
 
@@ -168,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
         cli.error("Specify the MBOX once, either positionally or with -i/--input")
     if args.attachment_scope and not args.has_attachments:
         cli.error("--attachment-scope requires --has-attachments")
+    if args.render_workers < 1:
+        cli.error("--render-workers must be a positive integer")
     filters = Filters(
         emails=args.email,
         senders=args.sender,
@@ -190,18 +199,41 @@ def main(argv: list[str] | None = None) -> int:
             account_emails=args.account_email,
             assume_timezone=args.assume_timezone,
             render_timeout=args.render_timeout,
+            render_workers=args.render_workers,
+            progress=lambda message: print(message, file=sys.stderr, flush=True),
         )
     except (ValueError, ZoneInfoNotFoundError) as exc:
         print(f"Invalid input: {exc}", file=sys.stderr)
         return 2
+    except RendererUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
     except (OSError, RuntimeError) as exc:
         print(
             f"Export failed: {exc}. Any recoverable staging directory remains marked incomplete.",
             file=sys.stderr,
         )
         return 3
+    except ExportInterrupted as exc:
+        if exc.published is not None:
+            print(
+                f"Export interrupted after publication. "
+                f"Archive already published at {exc.published}",
+                file=sys.stderr,
+            )
+        elif exc.stage is not None:
+            print(
+                f"Export interrupted. Incomplete staging retained at {exc.stage}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Export interrupted. No retained staging directory was found.",
+                file=sys.stderr,
+            )
+        return 3
     except KeyboardInterrupt:
-        print("Export interrupted. Staging data remains marked incomplete.", file=sys.stderr)
+        print("Export interrupted.", file=sys.stderr)
         return 3
     counts = result.manifest["counts"]
     print(f"Archive: {result.path}")
