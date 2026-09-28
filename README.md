@@ -63,7 +63,7 @@ mail-folder/takeout__2026-09-27T170000Z__abc12345/
       2007-06-15T143000Z__alice-to-reader__subject__m00000042-abc123def456__a001__invoice.pdf
 ```
 
-Folder names use UTC timestamps and preserve source occurrences even when messages have the same Message-ID, date, or subject. The index opens directly from disk. It offers static date, sender, recipient, label and conversation pages, plus optional JavaScript search and filters. Search covers message text, subjects, addresses, labels, and attachment filenames. It does not OCR image attachments or extract text inside office documents.
+Folder names use UTC timestamps and preserve source occurrences even when messages have the same Message-ID, date, or subject. The index opens directly from disk. It has a compact archive overview, direct links from subjects to messages, expandable browse lists for month, sender, recipient, label, and direction when known, plus conversation pages. JavaScript adds search, filters, result counts, and a no-results prompt; all messages and browse links remain usable without it. Search covers message text, subjects, addresses, labels, and attachment filenames. It does not OCR image attachments or extract text inside office documents. Default and compliance indexes keep export and record details in expandable sections; the basic index uses simpler descriptions.
 
 ## Select messages
 

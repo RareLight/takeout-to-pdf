@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import quote
 
@@ -13,24 +13,52 @@ from .render import escape
 
 CSS = """
 * { box-sizing: border-box; }
-body { margin: 0 auto; padding: 2rem 1.5rem; max-width: 1300px; color: #19222b; font: 16px/1.5 system-ui,sans-serif; }
-a { color: #175785; overflow-wrap: anywhere; }
-h1 { line-height: 1.2; } h2 { margin-top: 2rem; }
-.summary { background: #f0f4f7; padding: 1rem; border-radius: .4rem; }
+body { margin: 0 auto; padding: 2rem 1.5rem 4rem; max-width: 1400px; background: #f7f9fb; color: #192b38; font: 16px/1.5 system-ui,sans-serif; }
+a { color: #175785; overflow-wrap: anywhere; } a:hover { color: #0c3e62; }
+h1 { margin: 0 0 1rem; line-height: 1.2; } h2 { margin: 2.5rem 0 .75rem; line-height: 1.25; }
+p { margin: .65rem 0; }
+.quick-nav { display: flex; flex-wrap: wrap; gap: .6rem; margin: 0 0 1.25rem; }
+.quick-nav a, .action-link { display: inline-block; padding: .35rem .7rem; border: 1px solid #aac5d9; border-radius: .45rem; background: #fff; font-weight: 600; text-decoration: none; }
+.summary, .controls, .table-wrap { background: #fff; border: 1px solid #d6e0e8; border-radius: .7rem; }
+.summary { padding: 1rem 1.25rem; } .summary h2 { margin: 0 0 .6rem; }
+.summary-stats { display: flex; flex-wrap: wrap; gap: .75rem 2rem; margin: .7rem 0; }
+.summary-stats span { display: block; } .summary-stats strong { font-size: 1.35rem; }
+.muted, small { color: #536472; } small { display: block; }
 dl { display: grid; grid-template-columns: minmax(110px,1fr) 4fr; gap: .4rem 1rem; }
 dt { font-weight: 600; } dd { margin: 0; overflow-wrap: anywhere; }
-.controls { display: flex; gap: 1rem; flex-wrap: wrap; padding: 1rem 0; }
-label { display: flex; flex-direction: column; gap: .25rem; }
-input, select, button { font: inherit; padding: .4rem; max-width: 100%; }
-.browse { display: flex; flex-wrap: wrap; gap: 1rem 2rem; }
-.browse section { flex: 1 1 220px; max-height: 24rem; overflow: auto; }
+details { margin-top: .6rem; } summary { color: #175785; cursor: pointer; font-weight: 600; }
+.technical-details { font-size: .88rem; } .technical-details code { overflow-wrap: anywhere; }
+.controls { padding: 1rem; }
+.controls label { display: flex; flex: 1 1 155px; flex-direction: column; gap: .3rem; font-weight: 600; }
+.controls .search-label { display: flex; } .controls .check-label { flex-direction: row; align-items: center; }
+.filter-grid { display: flex; gap: .8rem; flex-wrap: wrap; align-items: end; padding: .8rem 0; }
+.controls > button { margin-top: .8rem; }
+input, select, button { font: inherit; padding: .55rem .65rem; max-width: 100%; border: 1px solid #94aab9; border-radius: .4rem; background: #fff; }
+.controls button { cursor: pointer; }
+.browse { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: .75rem; }
+.browse-group { margin: 0; padding: .8rem 1rem; border: 1px solid #d6e0e8; border-radius: .6rem; background: #fff; }
+.browse-group ul { max-height: 18rem; overflow: auto; margin-bottom: .2rem; }
 ul { padding-left: 1.25rem; }
-table { border-collapse: collapse; width: 100%; table-layout: fixed; }
-th,td { border-bottom: 1px solid #cbd4dd; text-align: left; padding: .65rem .5rem; vertical-align: top; overflow-wrap: anywhere; }
-th { background: #f0f4f7; } .date { width: 18%; } .people { width: 22%; } .documents { width: 23%; }
-small { display: block; color: #555; } .notice { border-left: 3px solid #aa7514; padding: .6rem 1rem; background: #fff6dc; }
+.table-wrap { overflow-x: auto; } .message-table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.message-table th, .message-table td { border-bottom: 1px solid #dbe3e9; text-align: left; padding: .85rem .7rem; vertical-align: top; overflow-wrap: anywhere; }
+.message-table thead th { background: #eaf1f6; } .message-table tbody tr:nth-child(even) { background: #f8fafc; }
+.message-table tbody tr:last-child th, .message-table tbody tr:last-child td { border-bottom: 0; }
+.message-table .date { width: 18%; } .message-table .people { width: 24%; } .message-table .documents { width: 24%; }
+.subject-link { font-weight: 700; font-size: 1.05rem; } .message-table .action-link { margin: 0 .4rem .4rem 0; }
+.attachments-list { margin: .3rem 0; padding-left: 1.2rem; }
+.notice { border-left: 3px solid #aa7514; padding: .6rem 1rem; background: #fff6dc; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 [hidden] { display: none !important; } :focus-visible { outline: 3px solid #b06b08; outline-offset: 2px; }
-@media(max-width:700px) { body { padding: 1rem .5rem; } table { font-size: .85rem; } .people { width: 24%; } }
+@media(max-width:700px) {
+  body { padding: 1rem .65rem 3rem; }
+  .message-table, .message-table tbody, .message-table tr, .message-table th, .message-table td { display: block; width: 100% !important; }
+  .message-table thead { display: none; }
+  .message-table tr { padding: .7rem; border-bottom: 1px solid #c8d6e0; }
+  .message-table th, .message-table td { padding: .2rem .35rem; border: 0; }
+  .message-table td[data-label]::before { content: attr(data-label) ': '; font-weight: 600; }
+  .message-table .subject-cell { padding: .5rem .35rem; }
+  .filter-grid label { flex-basis: 100%; }
+}
 """
 
 JS = """'use strict';
@@ -42,7 +70,9 @@ JS = """'use strict';
   const metadata = new Map(items.map(item => [item.id, item]));
   const rows = Array.from(document.querySelectorAll('tr[data-message-id]'));
   const count = document.getElementById('result-count');
-  const value = id => document.getElementById(id).value;
+  const empty = document.getElementById('no-results');
+  if (!rows.length) empty.textContent = 'No messages were included in this archive.';
+  const value = id => document.getElementById(id)?.value || '';
   function apply() {
     const query = value('query').toLocaleLowerCase().trim();
     const sender = value('sender'), recipient = value('recipient'), label = value('label');
@@ -61,6 +91,7 @@ JS = """'use strict';
       if (match) visible++;
     }
     count.textContent = `${visible} of ${rows.length} selected messages shown`;
+    empty.hidden = visible !== 0;
   }
   form.addEventListener('input', apply);
   form.addEventListener('submit', event => event.preventDefault());
@@ -172,38 +203,72 @@ def thread_paths(entries: list[dict]) -> dict[str, str]:
 def _row(
     entry: dict, page: Path, root: Path, conversations: dict[str, str], basic: bool = False
 ) -> str:
+    primary = entry.get("html_path") or entry.get("pdf_path")
+    primary_fragment = (
+        f"#page={entry['pdf_page']}"
+        if primary == entry.get("pdf_path") and entry.get("pdf_page")
+        else ""
+    )
+    subject = escape(entry.get("subject") or "No subject")
+    subject = (
+        f'<a class="subject-link" href="{escape(_href(primary, page, root, primary_fragment))}">'
+        f"{subject}</a>"
+        if primary
+        else subject
+    )
     links = []
-    for key, label in [
-        ("html_path", "Read HTML"),
-        ("pdf_path", "PDF"),
-        ("eml_path", "Original EML"),
-    ]:
+    for key, label in [("html_path", "Read email"), ("pdf_path", "PDF")]:
         if entry.get(key):
             fragment = (
                 f"#page={entry['pdf_page']}" if key == "pdf_path" and entry.get("pdf_page") else ""
             )
-            links.append(f'<a href="{escape(_href(entry[key], page, root, fragment))}">{label}</a>')
+            links.append(
+                f'<a class="action-link" href="{escape(_href(entry[key], page, root, fragment))}">'
+                f"{label}</a>"
+            )
     if entry["id"] in conversations:
         links.append(
-            f'<a href="{escape(_href(conversations[entry["id"]], page, root))}">Conversation</a>'
+            f'<a class="action-link" href="{escape(_href(conversations[entry["id"]], page, root))}">'
+            "Conversation</a>"
         )
+    attachments = []
     for attachment in entry.get("attachments", []):
         path = attachment.get("archive_path", attachment.get("path", ""))
         if path:
             label = attachment.get("original_filename" if basic else "filename", Path(path).name)
-            links.append(
-                f'<a href="{escape(_href(path, page, root))}">Attachment: {escape(label)}</a>'
+            attachments.append(
+                f'<li><a href="{escape(_href(path, page, root))}">{escape(label)}</a></li>'
             )
-    flags = "; ".join(str(issue) for issue in entry.get("issues", []))
-    identifier = "" if basic else f"<small>{escape(entry['id'])}</small>"
+    attachment_list = (
+        f'<div class="attachments"><strong>Attachments ({len(attachments)})</strong>'
+        f'<ul class="attachments-list">{"".join(attachments)}</ul></div>'
+        if attachments
+        else ""
+    )
+    technical = ""
+    if not basic:
+        details = [f"<p>Archive ID: <code>{escape(entry['id'])}</code></p>"]
+        details.extend(f"<p>{escape(issue)}</p>" for issue in entry.get("issues", []))
+        if entry.get("eml_path"):
+            details.append(
+                f'<p><a href="{escape(_href(entry["eml_path"], page, root))}">Original EML</a></p>'
+            )
+        technical = (
+            '<details class="technical-details"><summary>Record details</summary>'
+            + "".join(details)
+            + "</details>"
+        )
+    people = ", ".join(entry.get("senders", [])) or "Unknown sender"
+    recipients = ", ".join(entry.get("recipients", [])) or "Unknown recipients"
+    labels = entry.get("labels", [])
+    label_text = f"<small>Labels: {escape(', '.join(labels))}</small>" if labels else ""
     return (
-        f'<tr data-message-id="{escape(entry["id"])}"><td>{escape(entry.get("date_display") or "Undated")}'
-        f"{identifier}</td><td>{escape(entry.get('subject', 'No subject'))}"
-        f"<small>{escape(', '.join(entry.get('labels', [])))}</small>"
-        f"{f'<small>Limitations: {escape(flags)}</small>' if flags else ''}</td>"
-        f"<td>From: {escape(', '.join(entry.get('senders', [])))}<br>"
-        f"To/Cc/Bcc: {escape(', '.join(entry.get('recipients', [])))}"
-        f"<small>{escape(entry.get('direction', ''))}</small></td><td>{'<br>'.join(links)}</td></tr>"
+        f'<tr data-message-id="{escape(entry["id"])}">'
+        f'<td data-label="Date">{escape(entry.get("date_display") or "Undated")}</td>'
+        f'<th scope="row" class="subject-cell">{subject}'
+        f"{label_text}{technical}</th>"
+        f'<td data-label="People">From: {escape(people)}<br>To/Cc/Bcc: {escape(recipients)}</td>'
+        f'<td data-label="Files">{"".join(links)}{attachment_list}</td></tr>'
     )
 
 
@@ -211,11 +276,12 @@ def _table(
     entries: list[dict], page: Path, root: Path, conversations: dict[str, str], basic: bool = False
 ) -> str:
     return (
-        '<table><thead><tr><th class="date" scope="col">Date</th><th scope="col">Subject and labels</th>'
-        '<th class="people" scope="col">Participants</th><th class="documents" scope="col">Documents</th>'
-        "</tr></thead><tbody>"
+        '<div class="table-wrap"><table id="message-list" class="message-table"><caption class="sr-only">'
+        'Messages in chronological order</caption><thead><tr><th class="date" scope="col">Date</th>'
+        '<th scope="col">Subject</th><th class="people" scope="col">People</th>'
+        '<th class="documents" scope="col">Files and links</th></tr></thead><tbody>'
         + "".join(_row(entry, page, root, conversations, basic) for entry in entries)
-        + "</tbody></table>"
+        + "</tbody></table></div>"
     )
 
 
@@ -261,6 +327,12 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
     (assets / "archive.css").write_text(CSS, encoding="utf-8")
     (assets / "archive.js").write_text(JS, encoding="utf-8")
     conversations = thread_paths(entries)
+    conversation_sizes = Counter(conversations.values())
+    linked_conversations = {
+        message_id: path
+        for message_id, path in conversations.items()
+        if conversation_sizes[path] > 1
+    }
     facets: dict[str, dict[str, list[dict]]] = {
         key: defaultdict(list) for key in ["dates", "senders", "recipients", "labels", "direction"]
     }
@@ -273,6 +345,8 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         facets["direction"][entry.get("direction") or "unknown"].append(entry)
     browse = []
     for facet, groups in facets.items():
+        if facet == "direction" and not (set(groups) - {"unknown"}):
+            continue
         items = []
         for value, group in sorted(groups.items()):
             path = f"browse/{facet}/{_filename(value)}"
@@ -280,25 +354,36 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
             _page(
                 f"{facet.title()}: {value}",
                 f"<p>{len(group)} selected messages, in chronological order.</p>"
-                + _table(group, page, root, conversations, basic),
+                + _table(group, page, root, linked_conversations, basic),
                 page,
                 root,
             )
             items.append(
-                f'<li><a href="{escape(quote(path, safe="/"))}">{escape(value)}</a> ({len(group)})</li>'
+                f'<li><a href="{escape(quote(path, safe="/"))}">{escape(value)}</a> '
+                f'<span class="muted">({len(group)})</span></li>'
             )
+        title = {
+            "dates": "Months",
+            "senders": "Senders",
+            "recipients": "Recipients",
+            "labels": "Labels",
+            "direction": "Direction",
+        }[facet]
         browse.append(
-            f"<section><h3>{escape(facet.title())}</h3><ul>{''.join(items)}</ul></section>"
+            f'<details class="browse-group"><summary>{title} ({len(groups)})</summary>'
+            f"<ul>{''.join(items)}</ul></details>"
         )
     for path, group, issues in _threads(entries):
         page = root / path
         title = f"Conversation: {group[0].get('subject', 'No subject')}"
-        notes = (
-            '<div class="notice">'
-            + "".join(f"<p>{escape(issue)}</p>" for issue in issues)
-            + "</div>"
-        )
-        _page(title, notes + _table(group, page, root, conversations, basic), page, root)
+        notes = '<p class="muted">Related messages included in this archive. The conversation may be partial.</p>'
+        if not basic:
+            notes += (
+                '<details class="technical-details"><summary>How this conversation was grouped</summary>'
+                + "".join(f"<p>{escape(issue)}</p>" for issue in issues)
+                + "</details>"
+            )
+        _page(title, notes + _table(group, page, root, linked_conversations, basic), page, root)
     scripts = []
     for start in range(0, len(entries), 500):
         records = []
@@ -351,44 +436,76 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         scripts.append(path)
     scripts.append("assets/archive.js")
     controls = (
-        '<form id="filters" class="controls" hidden><label>Search subject, body, or filename'
-        '<input id="query" type="search"></label>'
+        '<form id="filters" class="controls" role="search" hidden>'
+        '<label class="search-label">Search messages and attachment names'
+        '<input id="query" type="search" placeholder="Try a name, topic, or phrase" '
+        'aria-controls="message-list"></label>'
+        '<details class="more-filters"><summary>More filters</summary><div class="filter-grid">'
         + _selection("sender", "Sender", sorted(facets["senders"]))
         + _selection("recipient", "Recipient", sorted(facets["recipients"]))
         + _selection("label", "Gmail label", sorted(facets["labels"]))
-        + _selection("direction", "Direction", sorted(facets["direction"]))
+        + (
+            _selection("direction", "Direction", sorted(facets["direction"]))
+            if set(facets["direction"]) - {"unknown"}
+            else ""
+        )
         + '<label>From date (UTC)<input id="start" type="date"></label>'
         '<label>Through date (UTC)<input id="end" type="date"></label>'
-        '<label>Has saved attachments/resources<input id="attached" type="checkbox"></label>'
+        '<label class="check-label">Has attachments<input id="attached" type="checkbox"></label>'
+        "</div></details>"
         '<button type="reset">Clear filters</button></form>'
     )
-    if basic:
-        counts = summary["counts"]
-        source = summary["source"]["filename"]
-        scope = (
-            '<section class="summary"><h2>Archive at a glance</h2>'
-            f"<p>{counts['selected']} of {counts['indexed']} messages selected from "
-            f"{escape(source)}. {counts['rendered'] + counts['limited']} PDFs available; "
-            f"{counts['limited']} with limitations; {counts['failed']} unavailable.</p>"
-            "<p>Folders use UTC dates. Browse below or search message text and attachment names.</p>"
-            "</section>"
+    counts = summary.get("counts", {})
+    selected = counts.get("selected", len(entries))
+    available = sum(bool(entry.get("pdf_path")) for entry in entries)
+    limited = counts.get("limited", 0)
+    failed = counts.get("failed", 0)
+    conversation_count = len(conversation_sizes)
+    source = summary.get("source", {}).get("filename", "")
+    source_text = f" from {escape(source)}" if source else ""
+    warning_parts = []
+    if limited:
+        warning_parts.append(
+            f"{limited} {'message may' if limited == 1 else 'messages may'} be incomplete"
         )
-    else:
+    if failed:
+        warning_parts.append(f"{failed} {'PDF is' if failed == 1 else 'PDFs are'} unavailable")
+    warning = f'<p class="notice">{escape("; ".join(warning_parts))}.</p>' if warning_parts else ""
+    technical_scope = ""
+    if not basic:
         details = "".join(
             f"<dt>{escape(key.replace('_', ' ').title())}</dt><dd>{escape(json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)}</dd>"
             for key, value in summary.items()
         )
-        scope = (
-            f'<section class="summary"><h2>Export scope and status</h2><dl>{details}</dl>'
-            "<p>Canonical files and date folders use UTC. Original dates are retained in message views. "
-            "Unknown dates appear after dated messages. The search covers selected messages only; "
-            "attachment contents are not indexed.</p></section>"
+        technical_scope = (
+            '<details class="technical-details"><summary>Export scope and status</summary>'
+            f"<dl>{details}</dl></details>"
         )
+    scope = (
+        '<section class="summary"><h2>Archive at a glance</h2>'
+        f"<p>Messages selected{source_text}. Dates and folders use UTC.</p>"
+        '<div class="summary-stats">'
+        f"<span><strong>{selected}</strong><br>{'message' if selected == 1 else 'messages'}</span>"
+        f"<span><strong>{available}</strong><br>{'PDF' if available == 1 else 'PDFs'} available</span>"
+        f"<span><strong>{conversation_count}</strong><br>"
+        f"{'conversation' if conversation_count == 1 else 'conversations'}</span></div>"
+        f"{warning}{technical_scope}</section>"
+    )
     content = (
-        scope + "<h2>Browse the archive</h2>"
-        f'<div class="browse">{"".join(browse)}</div><h2>Chronological messages</h2>{controls}'
-        f'<p id="result-count" role="status" aria-live="polite">{len(entries)} selected messages</p>'
+        '<nav class="quick-nav" aria-label="Page sections">'
+        '<a href="#find-messages">Find messages</a><a href="#browse-archive">Browse by category</a>'
+        '<a href="#messages-table">All messages</a></nav>'
+        + scope
+        + '<h2 id="find-messages">Find a message</h2>'
+        '<p class="muted">Search message text, subjects, people, labels, and attachment names. '
+        "Attachment contents are not searched.</p>"
+        + controls
+        + f'<p id="result-count" role="status" aria-live="polite">{len(entries)} selected messages</p>'
+        '<p id="no-results" class="notice" hidden>No messages match these filters. Try clearing a filter.</p>'
         "<noscript><p>JavaScript is disabled. All chronological messages and static browsing links remain available.</p></noscript>"
-        + _table(entries, root / "index.html", root, conversations, basic)
+        '<h2 id="browse-archive">Browse by category</h2>'
+        f'<div class="browse">{"".join(browse)}</div>'
+        '<h2 id="messages-table">Messages in date order</h2>'
+        + _table(entries, root / "index.html", root, linked_conversations, basic)
     )
     _page("Mail archive", content, root / "index.html", root, scripts)
