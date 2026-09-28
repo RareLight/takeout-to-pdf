@@ -16,7 +16,6 @@ import tempfile
 import threading
 import time
 import uuid
-from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -44,6 +43,7 @@ class ExportResult:
 
 
 ProgressCallback = Callable[[str], None]
+DEFAULT_RENDER_WORKERS = 12
 
 
 class RendererUnavailable(RuntimeError):
@@ -562,7 +562,7 @@ def export_archive(
     account_emails: list[str] | None = None,
     assume_timezone: str | None = None,
     render_timeout: float = 120,
-    render_workers: int = 4,
+    render_workers: int = DEFAULT_RENDER_WORKERS,
     progress: ProgressCallback | None = None,
 ) -> ExportResult:
     source = Path(source).absolute()
@@ -725,9 +725,10 @@ def export_archive(
         executor = (
             concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) if pool_size else None
         )
-        pending: deque[tuple[dict[str, Any], Path, MessageRecord, dict[str, Any], Path, Any]] = (
-            deque()
-        )
+        pending: dict[
+            concurrent.futures.Future[None],
+            tuple[dict[str, Any], Path, MessageRecord, dict[str, Any], Path],
+        ] = {}
         completed = 0
         used_basic_names: set[str] = set()
 
@@ -770,6 +771,13 @@ def export_archive(
             counts[entry["render_status"]] += 1
             completed += 1
             reporter.items("Rendering messages", completed, len(rows))
+
+        def collect_completed() -> None:
+            finished, _ = concurrent.futures.wait(
+                pending, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for future in finished:
+                collect(*pending.pop(future), future)
 
         try:
             for index, (ordinal, start, end, _, metadata_json) in enumerate(rows):
@@ -891,28 +899,20 @@ def export_archive(
                     else work / f"{entry['id']}.pdf"
                 )
                 assert pool is not None and executor is not None
-                pending.append(
-                    (
-                        entry,
-                        pdf_path,
-                        record,
-                        presentation,
-                        directory,
-                        executor.submit(
-                            _render_pdf,
-                            stage / entry["html_path"],
-                            pdf_path,
-                            stage,
-                            render_timeout,
-                            pool,
-                        ),
-                    )
+                future = executor.submit(
+                    _render_pdf,
+                    stage / entry["html_path"],
+                    pdf_path,
+                    stage,
+                    render_timeout,
+                    pool,
                 )
+                pending[future] = (entry, pdf_path, record, presentation, directory)
                 entries.append(entry)
                 while len(pending) > pool_size:
-                    collect(*pending.popleft())
+                    collect_completed()
             while pending:
-                collect(*pending.popleft())
+                collect_completed()
             reporter.items("Rendering messages", len(rows), len(rows), force=True)
             if format == "single-pdf":
                 reporter.stage("Assembling the single chronological PDF")

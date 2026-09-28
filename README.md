@@ -43,7 +43,7 @@ uv run takeout-to-pdf verify exports/client-mail
 
 The tool never overwrites an existing archive. Without `-o`, it creates a uniquely named archive directory beside the input MBOX, regardless of the current working directory or output format. In single-PDF mode, the combined PDF and its separate attachments are inside that sibling directory. Export progress and phase updates print to stderr. Before publication, an interrupted or fatal run retains any created staging directory marked incomplete; on Ctrl-C its retained path is printed to stderr. If the interrupt lands after publication, the already-published archive path is reported instead. Do not treat an incomplete staging directory as a completed export.
 
-PDF rendering uses four worker processes by default. Set `--render-workers N` to control parallel rendering and memory use; `--render-timeout SECONDS` limits each PDF render.
+PDF rendering uses twelve worker processes by default. Set `--render-workers N` to control parallel rendering and memory use; `--render-timeout SECONDS` limits each PDF render.
 
 Example directory layout for `mail-folder/takeout.mbox`:
 

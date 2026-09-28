@@ -3,6 +3,8 @@ import json
 import mailbox
 import os
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
 
 import pytest
@@ -851,6 +853,38 @@ def test_pooled_rendering_preserves_chronological_output(tmp_path):
             PdfReader(pooled.path / entry["pdf_path"]).pages
         )
     assert verify_archive(pooled.path)["ok"]
+
+
+def test_pooled_rendering_keeps_feeding_workers_past_slow_message(tmp_path, monkeypatch):
+    from takeout_to_pdf import archive
+
+    source = make_box(tmp_path, [make_message(f"M{i}") for i in range(4)])
+    first_started = threading.Event()
+    release_first = threading.Event()
+    fourth_started = threading.Event()
+    real_render = archive._render_pdf
+
+    def delayed_render(html, pdf, root, timeout, pool=None):
+        title = html.read_text(encoding="utf-8")
+        if "<title>M0</title>" in title:
+            first_started.set()
+            assert release_first.wait(10)
+        if "<title>M3</title>" in title:
+            fourth_started.set()
+        real_render(html, pdf, root, timeout, pool)
+
+    monkeypatch.setattr(archive, "_render_pdf", delayed_render)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(export_archive, source, tmp_path / "archive", render_workers=2)
+        try:
+            assert first_started.wait(10)
+            fed_fourth_before_first_finished = fourth_started.wait(3)
+        finally:
+            release_first.set()
+        result = future.result(timeout=30)
+    assert fed_fourth_before_first_finished
+    assert result.status == 0
+    assert [entry["subject"] for entry in records(result.path)] == [f"M{i}" for i in range(4)]
 
 
 def test_render_pool_timeout_marks_failure_and_recovers(tmp_path, monkeypatch):

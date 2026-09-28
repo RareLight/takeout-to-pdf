@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfoNotFoundError
 
 from . import __version__
-from .archive import ExportInterrupted, RendererUnavailable, export_archive
+from .archive import DEFAULT_RENDER_WORKERS, ExportInterrupted, RendererUnavailable, export_archive
 from .filters import Filters
 from .verify import verify_archive
 
@@ -153,9 +153,9 @@ def parser() -> argparse.ArgumentParser:
     presentation.add_argument(
         "--render-workers",
         type=int,
-        default=4,
+        default=DEFAULT_RENDER_WORKERS,
         metavar="N",
-        help="Persistent PDF renderer worker processes (default: 4); each needs renderer memory",
+        help=f"Persistent PDF renderer worker processes (default: {DEFAULT_RENDER_WORKERS}); each needs renderer memory",
     )
     return result
 
