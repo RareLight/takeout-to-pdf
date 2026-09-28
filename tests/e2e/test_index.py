@@ -2,6 +2,7 @@ from html.parser import HTMLParser
 
 import pytest
 from bs4 import BeautifulSoup
+from playwright.sync_api import expect
 
 from takeout_to_pdf.index import write_index
 
@@ -113,6 +114,160 @@ def test_index_leads_with_readable_navigation_and_keeps_technical_details_out_of
         assert "technical-version" in index
 
 
+def test_large_index_bounds_initial_page_and_keeps_static_navigation(tmp_path):
+    entries = [
+        {
+            "id": f"m{index:04}",
+            "subject": f"Synthetic message {index}",
+            "date_utc": "2020-01-01T00:00:00+00:00",
+            "date_display": "2020-01-01 UTC",
+            "senders": [f"sender{index}@example.com"],
+            "recipients": ["reader@example.com"],
+            "labels": ["Inbox"],
+            "pdf_path": f"message-{index}.pdf",
+            "body_text": f"BODY_MARKER_{index}",
+            "attachments": [],
+            "message_id": f"<m{index}@example.com>",
+            "references": [],
+        }
+        for index in range(201)
+    ]
+    write_index(tmp_path, entries, {"status": "complete"}, basic=True)
+    index = (tmp_path / "index.html").read_text()
+    second = (tmp_path / "browse/pages/page-0002.html").read_text()
+    assert index.count('data-message-id="') == 200
+    assert second.count('data-message-id="') == 1
+    assert "Synthetic message 200" in second
+    assert "page-0002.html" in index
+    assert "index.html" in second
+    assert 'src="assets/archive.js"' in index
+    assert 'src="assets/search-' not in index
+    assert "BODY_MARKER_200" in "".join(
+        path.read_text() for path in (tmp_path / "assets").glob("search-*.js")
+    )
+    assert '<input id="sender"' in index
+    assert "sender200@example.com" not in index
+    catalog = (tmp_path / "browse/senders/index.html").read_text()
+    catalog_next = (tmp_path / "browse/senders/page-0002.html").read_text()
+    assert catalog.count("<li>") == 200
+    assert catalog_next.count("<li>") == 1
+    assert list((tmp_path / "browse/recipients").glob("*page-0002.html"))
+
+
+@pytest.mark.browser
+def test_large_index_searches_later_pages_without_loading_search_on_open(tmp_path, page, browser):
+    entries = [
+        {
+            "id": f"m{index:04}",
+            "subject": f"Synthetic message {index}",
+            "date_utc": "2020-01-01T00:00:00+00:00",
+            "senders": [f"sender{index}@example.com"],
+            "recipients": ["reader@example.com"],
+            "labels": ["Inbox"],
+            "html_path": f"message-{index}.html",
+            "body_text": f"BODY_MARKER_{index}",
+            "attachments": [],
+            "message_id": f"<m{index}@example.com>",
+            "references": [],
+        }
+        for index in range(201)
+    ]
+    write_index(tmp_path, entries, {"status": "complete"})
+    loaded_search = []
+    page.on(
+        "request",
+        lambda request: loaded_search.append(request.url) if "search-" in request.url else None,
+    )
+    page.goto((tmp_path / "index.html").as_uri())
+    assert page.locator("tr[data-message-id]").count() == 200
+    assert not loaded_search
+    (tmp_path / "other.html").write_text("<h1>Other page</h1>")
+    page.goto((tmp_path / "other.html").as_uri())
+    page.go_back()
+    assert page.locator("tr[data-message-id]").count() == 200
+    assert not loaded_search
+    page.locator("#query").fill("BODY_MARKER_200")
+    expect(page.locator("#result-count")).to_contain_text("1 of 201")
+    assert page.locator("tr[data-message-id]:visible").get_attribute("data-message-id") == "m0200"
+    assert loaded_search
+    (tmp_path / "message-200.html").write_text("<h1>Message 200</h1>")
+    page.get_by_role("link", name="Synthetic message 200").click()
+    page.go_back()
+    expect(page.locator("#result-count")).to_contain_text("1 of 201")
+    expect(page.locator("tr[data-message-id]")).to_have_attribute("data-message-id", "m0200")
+    page.locator("#query").fill("Synthetic message")
+    expect(page.locator("#result-count")).to_contain_text("201 of 201")
+    assert page.locator("tr[data-message-id]").count() == 200
+    page.get_by_role("button", name="Next results").click()
+    assert page.locator("tr[data-message-id]").count() == 1
+    page.get_by_role("button", name="Clear filters").click()
+    expect(page.locator("tr[data-message-id]")).to_have_count(200)
+    page.get_by_text("More filters", exact=True).click()
+    page.locator("#sender").fill("sender200@")
+    expect(page.locator("#result-count")).to_contain_text("1 of 201")
+    expect(page.locator("tr[data-message-id]")).to_have_attribute("data-message-id", "m0200")
+    no_js_context = browser.new_context(java_script_enabled=False)
+    no_js_page = no_js_context.new_page()
+    no_js_page.goto((tmp_path / "index.html").as_uri())
+    assert no_js_page.locator("#filters").is_hidden()
+    no_js_page.get_by_role("link", name="Next", exact=True).first.click()
+    assert no_js_page.locator("tr[data-message-id]").count() == 1
+    no_js_context.close()
+
+
+@pytest.mark.browser
+def test_search_result_markup_keeps_message_text_inert(tmp_path, page):
+    entry = {
+        "id": "m1",
+        "subject": '<img src="https://example.com/tracker" onerror="alert(1)">',
+        "date_utc": "2020-01-01T00:00:00+00:00",
+        "senders": ["alice@example.com"],
+        "recipients": ["reader@example.com"],
+        "labels": [],
+        "html_path": "message.html",
+        "body_text": "SAFE_SEARCH_MARKER",
+        "attachments": [],
+        "message_id": "<m1@example.com>",
+        "references": [],
+    }
+    write_index(tmp_path, [entry], {"status": "complete"})
+    network = []
+    dialogs = []
+    page.on(
+        "request",
+        lambda request: network.append(request.url) if request.url.startswith("https:") else None,
+    )
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+    page.goto((tmp_path / "index.html").as_uri())
+    page.locator("#query").fill("SAFE_SEARCH_MARKER")
+    expect(page.locator("#result-count")).to_contain_text("1 of 1")
+    assert page.locator("img").count() == 0
+    assert not network and not dialogs
+
+
+@pytest.mark.browser
+def test_missing_search_file_keeps_static_browsing_available(tmp_path, page):
+    entry = {
+        "id": "m1",
+        "subject": "Readable message",
+        "date_utc": "2020-01-01T00:00:00+00:00",
+        "senders": ["alice@example.com"],
+        "recipients": [],
+        "labels": [],
+        "html_path": "message.html",
+        "body_text": "marker",
+        "attachments": [],
+        "message_id": "<m1@example.com>",
+        "references": [],
+    }
+    write_index(tmp_path, [entry], {"status": "complete"})
+    (tmp_path / "assets/search-0001.js").unlink()
+    page.goto((tmp_path / "index.html").as_uri())
+    page.locator("#query").fill("marker")
+    expect(page.get_by_text("Search files could not be loaded.", exact=False)).to_be_visible()
+    assert page.get_by_role("link", name="Readable message").is_visible()
+
+
 @pytest.mark.browser
 def test_offline_search_exact_facets_and_no_remote_requests(tmp_path, page):
     import shutil
@@ -150,18 +305,18 @@ def test_offline_search_exact_facets_and_no_remote_requests(tmp_path, page):
     page.locator("#filters").wait_for(state="visible")
     page.get_by_text("More filters", exact=True).click()
     page.locator("#sender").select_option("alice@example.com")
-    assert page.locator("tr[data-message-id]:visible").count() == 1
+    expect(page.locator("tr[data-message-id]:visible")).to_have_count(1)
     assert page.locator("tr[data-message-id]:visible").get_attribute("data-message-id") == "m1"
     page.get_by_role("button", name="Clear filters").click()
     page.locator("#query").fill("needle2")
-    assert page.locator("tr[data-message-id]:visible").count() == 1
-    assert page.locator("tr[data-message-id]:visible").get_attribute("data-message-id") == "m2"
+    expect(page.locator("tr[data-message-id]:visible")).to_have_count(1)
+    expect(page.locator("tr[data-message-id]:visible")).to_have_attribute("data-message-id", "m2")
     page.locator("#query").fill("no matching message")
-    assert page.locator("tr[data-message-id]:visible").count() == 0
+    expect(page.locator("tr[data-message-id]:visible")).to_have_count(0)
     assert page.get_by_text("No messages match these filters.", exact=False).is_visible()
     page.locator("#query").fill("")
     page.locator("#end").fill("2020-01-01")
-    assert page.locator("tr[data-message-id]:visible").count() == 1
+    expect(page.locator("tr[data-message-id]:visible")).to_have_count(1)
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.get_by_role("link", name="Quarterly report").first.is_visible()
     assert page.get_by_role("link", name="Browse by category").is_visible()
@@ -192,13 +347,13 @@ def test_basic_archive_index_searches_body_and_opens_pdf(tmp_path, page):
     page.locator("#filters").wait_for(state="visible")
     page.locator("#query").fill("UNIQUE_BASIC_BODY_MARKER")
     row = page.locator("tr[data-message-id]:visible")
-    assert row.count() == 1
+    expect(row).to_have_count(1)
     pdf_link = row.get_by_role("link", name="PDF")
     href = pdf_link.get_attribute("href")
     assert href is not None
     assert (archive.path / unquote(urlsplit(href).path)).is_file()
     page.locator("#query").fill("absent phrase")
-    assert page.locator("tr[data-message-id]:visible").count() == 0
+    expect(page.locator("tr[data-message-id]:visible")).to_have_count(0)
 
 
 @pytest.mark.browser

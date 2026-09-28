@@ -11,6 +11,10 @@ from urllib.parse import quote
 
 from .render import escape
 
+PAGE_SIZE = 200
+FACET_PREVIEW = 12
+FILTER_SELECT_LIMIT = 100
+
 CSS = """
 * { box-sizing: border-box; }
 body { margin: 0 auto; padding: 2rem 1.5rem 4rem; max-width: 1400px; background: #f7f9fb; color: #192b38; font: 16px/1.5 system-ui,sans-serif; }
@@ -46,6 +50,9 @@ ul { padding-left: 1.25rem; }
 .message-table .date { width: 18%; } .message-table .people { width: 24%; } .message-table .documents { width: 24%; }
 .subject-link { font-weight: 700; font-size: 1.05rem; } .message-table .action-link { margin: 0 .4rem .4rem 0; }
 .attachments-list { margin: .3rem 0; padding-left: 1.2rem; }
+.pager { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; margin: 1rem 0; }
+.pager a, .pager button { display: inline-block; padding: .4rem .7rem; border: 1px solid #aac5d9; border-radius: .45rem; background: #fff; color: #175785; font-weight: 600; text-decoration: none; }
+.pager button:disabled { color: #687781; cursor: default; }
 .notice { border-left: 3px solid #aa7514; padding: .6rem 1rem; background: #fff6dc; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 [hidden] { display: none !important; } :focus-visible { outline: 3px solid #b06b08; outline-offset: 2px; }
@@ -65,38 +72,139 @@ JS = """'use strict';
 (() => {
   const form = document.getElementById('filters');
   if (!form) return;
-  form.hidden = false;
-  const items = (window.archiveSearchShards || []).flat();
-  const metadata = new Map(items.map(item => [item.id, item]));
-  const rows = Array.from(document.querySelectorAll('tr[data-message-id]'));
+  const tbody = document.getElementById('message-list').tBodies[0];
+  const initialRows = tbody.innerHTML;
+  const staticPagers = document.querySelectorAll('.static-pager');
+  const searchPager = document.getElementById('search-pages');
+  const previous = document.getElementById('results-previous');
+  const next = document.getElementById('results-next');
+  const pageLabel = document.getElementById('search-page-label');
   const count = document.getElementById('result-count');
   const empty = document.getElementById('no-results');
-  if (!rows.length) empty.textContent = 'No messages were included in this archive.';
+  const total = Number(form.dataset.total);
+  const shardCount = Number(form.dataset.shards);
+  const pageSize = Number(form.dataset.pageSize);
+  let matches = [];
+  let resultPage = 0;
+  let revision = 0;
+  let working = false;
+  let timer;
   const value = id => document.getElementById(id)?.value || '';
-  function apply() {
-    const query = value('query').toLocaleLowerCase().trim();
-    const sender = value('sender'), recipient = value('recipient'), label = value('label');
-    const direction = value('direction'), start = value('start'), end = value('end');
-    const attached = document.getElementById('attached').checked;
-    let visible = 0;
-    for (const row of rows) {
-      const item = metadata.get(row.dataset.messageId);
-      if (!item) continue;
-      const date = item.date.slice(0,10);
-      const match = (!query || item.text.toLocaleLowerCase().includes(query)) &&
-        (!sender || item.senders.includes(sender)) && (!recipient || item.recipients.includes(recipient)) &&
-        (!label || item.labels.includes(label)) && (!direction || item.direction === direction) &&
-        (!start || (date && date >= start)) && (!end || (date && date <= end)) && (!attached || item.attached);
-      row.hidden = !match;
-      if (match) visible++;
-    }
-    count.textContent = `${visible} of ${rows.length} selected messages shown`;
-    empty.hidden = visible !== 0;
+  function criteria() {
+    return {
+      query: value('query').toLocaleLowerCase().trim(),
+      sender: value('sender'), recipient: value('recipient'), label: value('label'),
+      direction: value('direction'), start: value('start'), end: value('end'),
+      attached: document.getElementById('attached').checked
+    };
   }
-  form.addEventListener('input', apply);
+  function hasFilters(filters) {
+    return Boolean(filters.query || filters.sender || filters.recipient || filters.label ||
+      filters.direction || filters.start || filters.end || filters.attached);
+  }
+  function facetMatches(values, id, sought) {
+    if (!sought) return true;
+    const control = document.getElementById(id);
+    return control.tagName === 'SELECT' ? values.includes(sought) :
+      values.some(value => value.toLocaleLowerCase().includes(sought.toLocaleLowerCase()));
+  }
+  function includes(item, filters) {
+    const date = item.date.slice(0, 10);
+    return facetMatches(item.senders, 'sender', filters.sender) &&
+      facetMatches(item.recipients, 'recipient', filters.recipient) &&
+      facetMatches(item.labels, 'label', filters.label) &&
+      (!filters.direction || item.direction === filters.direction) &&
+      (!filters.start || (date && date >= filters.start)) &&
+      (!filters.end || (date && date <= filters.end)) &&
+      (!filters.attached || item.attached) &&
+      (!filters.query || item.text.toLocaleLowerCase().includes(filters.query));
+  }
+  function showInitial() {
+    tbody.innerHTML = initialRows;
+    staticPagers.forEach(pager => { pager.hidden = false; });
+    searchPager.hidden = true;
+    count.textContent = `${total} selected messages`;
+    empty.textContent = total ? 'No messages match these filters. Try clearing a filter.' :
+      'No messages were included in this archive.';
+    empty.hidden = total !== 0;
+  }
+  function showResults() {
+    const pages = Math.ceil(matches.length / pageSize);
+    const start = resultPage * pageSize;
+    tbody.innerHTML = matches.slice(start, start + pageSize).join('');
+    staticPagers.forEach(pager => { pager.hidden = true; });
+    searchPager.hidden = pages < 2;
+    previous.disabled = resultPage === 0;
+    next.disabled = resultPage + 1 >= pages;
+    pageLabel.textContent = pages ? `Page ${resultPage + 1} of ${pages}` : '';
+    count.textContent = `${matches.length} of ${total} selected messages shown`;
+    empty.textContent = 'No messages match these filters. Try clearing a filter.';
+    empty.hidden = matches.length !== 0;
+  }
+  function loadShard(index) {
+    return new Promise((resolve, reject) => {
+      window.archiveSearchShards = [];
+      const script = document.createElement('script');
+      script.src = `assets/search-${String(index + 1).padStart(4, '0')}.js`;
+      script.onload = () => {
+        const shards = window.archiveSearchShards;
+        window.archiveSearchShards = [];
+        script.remove();
+        if (shards.length === 1 && Array.isArray(shards[0])) resolve(shards[0]);
+        else reject(new Error('Invalid search shard'));
+      };
+      script.onerror = () => { script.remove(); reject(new Error('Search shard unavailable')); };
+      document.head.appendChild(script);
+    });
+  }
+  async function search() {
+    if (working) return;
+    working = true;
+    while (true) {
+      const current = revision;
+      const filters = criteria();
+      if (!hasFilters(filters)) { showInitial(); break; }
+      matches = [];
+      resultPage = 0;
+      empty.hidden = true;
+      count.textContent = 'Searching selected messages…';
+      try {
+        for (let index = 0; index < shardCount; index++) {
+          const records = await loadShard(index);
+          if (current !== revision) break;
+          for (const item of records) if (includes(item, filters)) matches.push(item.row);
+          if (index % 5 === 0) count.textContent = `Searching… ${index + 1} of ${shardCount} files`;
+        }
+        if (current === revision) { showResults(); break; }
+      } catch (error) {
+        if (current === revision) {
+          showInitial();
+          count.textContent = 'Search unavailable';
+          empty.textContent = 'Search files could not be loaded. Browse pages remain available.';
+          empty.hidden = false;
+          break;
+        }
+      }
+    }
+    working = false;
+  }
+  function requestSearch(immediate = false) {
+    revision++;
+    clearTimeout(timer);
+    timer = setTimeout(search, immediate ? 0 : 250);
+  }
+  previous.addEventListener('click', () => { resultPage--; showResults(); });
+  next.addEventListener('click', () => { resultPage++; showResults(); });
+  form.addEventListener('input', () => requestSearch());
   form.addEventListener('submit', event => event.preventDefault());
-  form.addEventListener('reset', () => setTimeout(apply, 0));
-  apply();
+  form.addEventListener('reset', () => setTimeout(() => requestSearch(true), 0));
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) setTimeout(() => {
+      if (hasFilters(criteria())) requestSearch(true);
+    }, 0);
+  });
+  form.hidden = false;
+  showInitial();
 })();
 """
 
@@ -311,12 +419,98 @@ def _page(
 
 
 def _selection(name: str, label: str, values: list[str]) -> str:
+    if len(values) > FILTER_SELECT_LIMIT:
+        return (
+            f'<label>{label}<input id="{name}" type="search" '
+            f'placeholder="Type part of {escape(label.lower())}"></label>'
+        )
     options = "".join(
         f'<option value="{escape(value)}">{escape(value)}</option>' for value in values
     )
     return (
         f'<label>{label}<select id="{name}"><option value="">All</option>{options}</select></label>'
     )
+
+
+def _page_paths(base: str, count: int, size: int) -> list[str]:
+    pages = max(1, (count + size - 1) // size)
+    result = [base]
+    for number in range(2, pages + 1):
+        if base == "index.html":
+            result.append(f"browse/pages/page-{number:04d}.html")
+        else:
+            path = Path(base)
+            stem = "" if path.stem == "index" else f"{path.stem}-"
+            result.append((path.parent / f"{stem}page-{number:04d}.html").as_posix())
+    return result
+
+
+def _pager(paths: list[str], index: int, page: Path, root: Path, label: str) -> str:
+    if len(paths) == 1:
+        return ""
+    links = []
+    shown = {index}
+    for position, text in [
+        (index - 1, "Previous"),
+        (0, "First"),
+        (index + 1, "Next"),
+        (len(paths) - 1, "Last"),
+    ]:
+        if 0 <= position < len(paths) and position not in shown:
+            links.append(f'<a href="{escape(_href(paths[position], page, root))}">{text}</a>')
+            shown.add(position)
+    return (
+        f'<nav class="pager static-pager" aria-label="{escape(label)}">'
+        f"<span>Page {index + 1} of {len(paths)}</span>{''.join(links)}</nav>"
+    )
+
+
+def _write_listing(
+    root: Path,
+    base: str,
+    title: str,
+    entries: list[dict],
+    conversations: dict[str, str],
+    basic: bool,
+    *,
+    first_page: bool = True,
+    intro: str | None = None,
+) -> list[str]:
+    paths = _page_paths(base, len(entries), PAGE_SIZE)
+    for index, path in enumerate(paths):
+        if index == 0 and not first_page:
+            continue
+        page = root / path
+        shown = entries[index * PAGE_SIZE : (index + 1) * PAGE_SIZE]
+        pager = _pager(paths, index, page, root, "Message pages")
+        content = (
+            (intro or f"<p>{len(entries)} selected messages, in date order.</p>")
+            + pager
+            + _table(shown, page, root, conversations, basic)
+            + pager
+        )
+        _page(title if index == 0 else f"{title} - page {index + 1}", content, page, root)
+    return paths
+
+
+def _write_catalog(root: Path, facet: str, items: list[tuple[str, int, str]]) -> str:
+    base = f"browse/{facet}/index.html"
+    paths = _page_paths(base, len(items), PAGE_SIZE)
+    for index, path in enumerate(paths):
+        page = root / path
+        links = "".join(
+            f'<li><a href="{escape(_href(target, page, root))}">{escape(value)}</a> '
+            f'<span class="muted">({count})</span></li>'
+            for value, count, target in items[index * PAGE_SIZE : (index + 1) * PAGE_SIZE]
+        )
+        pager = _pager(paths, index, page, root, "Category pages")
+        _page(
+            f"{facet.title()} - page {index + 1}",
+            f"<p>{len(items)} categories.</p>{pager}<ul>{links}</ul>{pager}",
+            page,
+            root,
+        )
+    return base
 
 
 def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool = False) -> None:
@@ -333,6 +527,9 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         for message_id, path in conversations.items()
         if conversation_sizes[path] > 1
     }
+    root_paths = _write_listing(
+        root, "index.html", "Mail archive", entries, linked_conversations, basic, first_page=False
+    )
     facets: dict[str, dict[str, list[dict]]] = {
         key: defaultdict(list) for key in ["dates", "senders", "recipients", "labels", "direction"]
     }
@@ -350,18 +547,10 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         items = []
         for value, group in sorted(groups.items()):
             path = f"browse/{facet}/{_filename(value)}"
-            page = root / path
-            _page(
-                f"{facet.title()}: {value}",
-                f"<p>{len(group)} selected messages, in chronological order.</p>"
-                + _table(group, page, root, linked_conversations, basic),
-                page,
-                root,
+            _write_listing(
+                root, path, f"{facet.title()}: {value}", group, linked_conversations, basic
             )
-            items.append(
-                f'<li><a href="{escape(quote(path, safe="/"))}">{escape(value)}</a> '
-                f'<span class="muted">({len(group)})</span></li>'
-            )
+            items.append((value, len(group), path))
         title = {
             "dates": "Months",
             "senders": "Senders",
@@ -369,12 +558,22 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
             "labels": "Labels",
             "direction": "Direction",
         }[facet]
+        preview = "".join(
+            f'<li><a href="{escape(_href(path, root / "index.html", root))}">'
+            f'{escape(value)}</a> <span class="muted">({count})</span></li>'
+            for value, count, path in items[:FACET_PREVIEW]
+        )
+        if len(items) > FACET_PREVIEW:
+            catalog = _write_catalog(root, facet, items)
+            preview += (
+                f'<li><a href="{escape(_href(catalog, root / "index.html", root))}">'
+                f"Browse all {len(items)} {title.lower()}</a></li>"
+            )
         browse.append(
             f'<details class="browse-group"><summary>{title} ({len(groups)})</summary>'
-            f"<ul>{''.join(items)}</ul></details>"
+            f"<ul>{preview}</ul></details>"
         )
     for path, group, issues in _threads(entries):
-        page = root / path
         title = f"Conversation: {group[0].get('subject', 'No subject')}"
         notes = '<p class="muted">Related messages included in this archive. The conversation may be partial.</p>'
         if not basic:
@@ -383,8 +582,8 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
                 + "".join(f"<p>{escape(issue)}</p>" for issue in issues)
                 + "</details>"
             )
-        _page(title, notes + _table(group, page, root, linked_conversations, basic), page, root)
-    scripts = []
+        _write_listing(root, path, title, group, linked_conversations, basic, intro=notes)
+    shard_count = 0
     for start in range(0, len(entries), 500):
         records = []
         for entry in entries[start : start + 500]:
@@ -409,6 +608,7 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
                     "labels": entry.get("labels", []),
                     "direction": entry.get("direction") or "unknown",
                     "attached": bool(entry.get("attachments")),
+                    "row": _row(entry, root / "index.html", root, linked_conversations, basic),
                     "text": "\n".join(
                         [
                             str(entry.get("subject", "")),
@@ -433,10 +633,10 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
             f"window.archiveSearchShards.push({payload});\n",
             encoding="utf-8",
         )
-        scripts.append(path)
-    scripts.append("assets/archive.js")
+        shard_count += 1
     controls = (
-        '<form id="filters" class="controls" role="search" hidden>'
+        f'<form id="filters" class="controls" role="search" data-total="{len(entries)}" '
+        f'data-shards="{shard_count}" data-page-size="{PAGE_SIZE}" hidden>'
         '<label class="search-label">Search messages and attachment names'
         '<input id="query" type="search" placeholder="Try a name, topic, or phrase" '
         'aria-controls="message-list"></label>'
@@ -506,6 +706,12 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         '<h2 id="browse-archive">Browse by category</h2>'
         f'<div class="browse">{"".join(browse)}</div>'
         '<h2 id="messages-table">Messages in date order</h2>'
-        + _table(entries, root / "index.html", root, linked_conversations, basic)
+        + _pager(root_paths, 0, root / "index.html", root, "Message pages")
+        + _table(entries[:PAGE_SIZE], root / "index.html", root, linked_conversations, basic)
+        + _pager(root_paths, 0, root / "index.html", root, "Message pages")
+        + '<nav id="search-pages" class="pager" aria-label="Search result pages" hidden>'
+        '<button id="results-previous" type="button">Previous results</button>'
+        '<span id="search-page-label"></span>'
+        '<button id="results-next" type="button">Next results</button></nav>'
     )
-    _page("Mail archive", content, root / "index.html", root, scripts)
+    _page("Mail archive", content, root / "index.html", root, ["assets/archive.js"])
