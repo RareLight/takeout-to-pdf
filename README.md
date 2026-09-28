@@ -2,7 +2,9 @@
 
 Convert a Google Takeout MBOX into a chronological, offline mail archive. By default, each message gets a searchable PDF and HTML reading view in a UTC date directory. Attachments are saved as separate files beside their message PDF. An offline index links messages by date, sender, recipient, Gmail label, and conversation. The original MBOX is read, never rewritten.
 
-A single chronological PDF is available with `--format single-pdf`. Its attachments are saved beside the PDF, prefixed with the owning message ID. Both formats include a manifest, selection ledger, issue list, checksums, and a read-only `verify` command. The export reports limitations instead of silently claiming missing or damaged content was preserved.
+A single chronological PDF is available with `--format single-pdf`. Its attachments are saved beside the PDF, prefixed with the owning message ID. Every export includes a manifest, selection ledger, issue list, checksums, and a read-only `verify` command. The export reports limitations instead of silently claiming missing or damaged content was preserved.
+
+Use `--basic` for a smaller, human navigable directory archive. Its `messages/` tree contains only message PDFs and saved attachments, with filenames based on the UTC date, subject, sender, and recipient. Repeated names get a numbered suffix. Generated filename components are bounded and avoid Windows reserved characters; keep the chosen output directory short if [Windows long paths](https://learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation) are disabled. The root HTML index and browse pages remain, along with the manifest, ledgers, issues, and checksums needed for verification. Basic mode omits per-message HTML, EML, and search-text files; the index still searches message bodies. It cannot be combined with `--compliance` or `--format single-pdf`.
 
 ## Install
 
@@ -28,6 +30,9 @@ uv run takeout-to-pdf takeout.mbox -o exports/client-mail
 
 # One chronological PDF, with separate attachments beside it
 uv run takeout-to-pdf takeout.mbox --format single-pdf -o exports/single-file
+
+# Readable PDF and attachment files, with an HTML browse index
+uv run takeout-to-pdf takeout.mbox --basic -o exports/basic
 
 # Full technical headers and source byte preservation
 uv run takeout-to-pdf takeout.mbox --compliance -o exports/compliance

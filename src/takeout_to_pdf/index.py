@@ -169,7 +169,9 @@ def thread_paths(entries: list[dict]) -> dict[str, str]:
     return {entry["id"]: path for path, group, _ in _threads(entries) for entry in group}
 
 
-def _row(entry: dict, page: Path, root: Path, conversations: dict[str, str]) -> str:
+def _row(
+    entry: dict, page: Path, root: Path, conversations: dict[str, str], basic: bool = False
+) -> str:
     links = []
     for key, label in [
         ("html_path", "Read HTML"),
@@ -188,14 +190,15 @@ def _row(entry: dict, page: Path, root: Path, conversations: dict[str, str]) -> 
     for attachment in entry.get("attachments", []):
         path = attachment.get("archive_path", attachment.get("path", ""))
         if path:
-            label = attachment.get("filename", Path(path).name)
+            label = attachment.get("original_filename" if basic else "filename", Path(path).name)
             links.append(
                 f'<a href="{escape(_href(path, page, root))}">Attachment: {escape(label)}</a>'
             )
     flags = "; ".join(str(issue) for issue in entry.get("issues", []))
+    identifier = "" if basic else f"<small>{escape(entry['id'])}</small>"
     return (
         f'<tr data-message-id="{escape(entry["id"])}"><td>{escape(entry.get("date_display") or "Undated")}'
-        f"<small>{escape(entry['id'])}</small></td><td>{escape(entry.get('subject', 'No subject'))}"
+        f"{identifier}</td><td>{escape(entry.get('subject', 'No subject'))}"
         f"<small>{escape(', '.join(entry.get('labels', [])))}</small>"
         f"{f'<small>Limitations: {escape(flags)}</small>' if flags else ''}</td>"
         f"<td>From: {escape(', '.join(entry.get('senders', [])))}<br>"
@@ -204,12 +207,14 @@ def _row(entry: dict, page: Path, root: Path, conversations: dict[str, str]) -> 
     )
 
 
-def _table(entries: list[dict], page: Path, root: Path, conversations: dict[str, str]) -> str:
+def _table(
+    entries: list[dict], page: Path, root: Path, conversations: dict[str, str], basic: bool = False
+) -> str:
     return (
         '<table><thead><tr><th class="date" scope="col">Date</th><th scope="col">Subject and labels</th>'
         '<th class="people" scope="col">Participants</th><th class="documents" scope="col">Documents</th>'
         "</tr></thead><tbody>"
-        + "".join(_row(entry, page, root, conversations) for entry in entries)
+        + "".join(_row(entry, page, root, conversations, basic) for entry in entries)
         + "</tbody></table>"
     )
 
@@ -248,7 +253,7 @@ def _selection(name: str, label: str, values: list[str]) -> str:
     )
 
 
-def write_index(root: Path, entries: list[dict], summary: dict) -> None:
+def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool = False) -> None:
     """Write static facets and chronology, with body search that works on file:// URLs."""
     root = root.resolve()
     assets = root / "assets"
@@ -275,7 +280,7 @@ def write_index(root: Path, entries: list[dict], summary: dict) -> None:
             _page(
                 f"{facet.title()}: {value}",
                 f"<p>{len(group)} selected messages, in chronological order.</p>"
-                + _table(group, page, root, conversations),
+                + _table(group, page, root, conversations, basic),
                 page,
                 root,
             )
@@ -293,7 +298,7 @@ def write_index(root: Path, entries: list[dict], summary: dict) -> None:
             + "".join(f"<p>{escape(issue)}</p>" for issue in issues)
             + "</div>"
         )
-        _page(title, notes + _table(group, page, root, conversations), page, root)
+        _page(title, notes + _table(group, page, root, conversations, basic), page, root)
     scripts = []
     for start in range(0, len(entries), 500):
         records = []
@@ -357,18 +362,33 @@ def write_index(root: Path, entries: list[dict], summary: dict) -> None:
         '<label>Has saved attachments/resources<input id="attached" type="checkbox"></label>'
         '<button type="reset">Clear filters</button></form>'
     )
-    details = "".join(
-        f"<dt>{escape(key.replace('_', ' ').title())}</dt><dd>{escape(json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)}</dd>"
-        for key, value in summary.items()
-    )
+    if basic:
+        counts = summary["counts"]
+        source = summary["source"]["filename"]
+        scope = (
+            '<section class="summary"><h2>Archive at a glance</h2>'
+            f"<p>{counts['selected']} of {counts['indexed']} messages selected from "
+            f"{escape(source)}. {counts['rendered'] + counts['limited']} PDFs available; "
+            f"{counts['limited']} with limitations; {counts['failed']} unavailable.</p>"
+            "<p>Folders use UTC dates. Browse below or search message text and attachment names.</p>"
+            "</section>"
+        )
+    else:
+        details = "".join(
+            f"<dt>{escape(key.replace('_', ' ').title())}</dt><dd>{escape(json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)}</dd>"
+            for key, value in summary.items()
+        )
+        scope = (
+            f'<section class="summary"><h2>Export scope and status</h2><dl>{details}</dl>'
+            "<p>Canonical files and date folders use UTC. Original dates are retained in message views. "
+            "Unknown dates appear after dated messages. The search covers selected messages only; "
+            "attachment contents are not indexed.</p></section>"
+        )
     content = (
-        f'<section class="summary"><h2>Export scope and status</h2><dl>{details}</dl>'
-        "<p>Canonical files and date folders use UTC. Original dates are retained in message views. "
-        "Unknown dates appear after dated messages. The search covers selected messages only; "
-        "attachment contents are not indexed.</p></section><h2>Browse the archive</h2>"
+        scope + "<h2>Browse the archive</h2>"
         f'<div class="browse">{"".join(browse)}</div><h2>Chronological messages</h2>{controls}'
         f'<p id="result-count" role="status" aria-live="polite">{len(entries)} selected messages</p>'
         "<noscript><p>JavaScript is disabled. All chronological messages and static browsing links remain available.</p></noscript>"
-        + _table(entries, root / "index.html", root, conversations)
+        + _table(entries, root / "index.html", root, conversations, basic)
     )
     _page("Mail archive", content, root / "index.html", root, scripts)

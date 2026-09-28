@@ -136,6 +136,18 @@ def test_cli_rejects_missing_or_duplicate_input(source, tmp_path, capsys):
     assert not (tmp_path / "duplicate").exists()
 
 
+def test_cli_basic_export_and_incompatible_options(source, tmp_path, capsys):
+    output = tmp_path / "basic"
+    assert main([str(source), "-o", str(output), "--basic"]) == 0
+    assert json.loads((output / "manifest.json").read_text())["basic"] is True
+    assert (output / "index.html").is_file()
+    for incompatible in (["--compliance"], ["--format", "single-pdf"]):
+        with pytest.raises(SystemExit) as error:
+            main([str(source), "-o", str(tmp_path / "invalid"), "--basic", *incompatible])
+        assert error.value.code == 2
+        assert not (tmp_path / "invalid").exists()
+
+
 def test_cli_default_output_is_sibling_of_input(source, tmp_path, monkeypatch, capsys):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()

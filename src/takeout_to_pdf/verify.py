@@ -120,6 +120,11 @@ def verify_archive(root: Path) -> dict[str, Any]:
             json.loads(contained_file(root, "manifest.json").read_text(encoding="utf-8")),
             "manifest",
         )
+        basic = manifest.get("basic", False)
+        if type(basic) is not bool:
+            raise ValueError("manifest.basic must be a boolean")
+        if basic and (manifest.get("compliance") or manifest.get("format") != "directory"):
+            errors.append("Basic archive has incompatible format or compliance setting")
         records = _jsonl(contained_file(root, "messages.jsonl"))
         ledger = _jsonl(contained_file(root, "selection.jsonl"))
         counts = _object(manifest["counts"], "counts")
@@ -198,15 +203,30 @@ def verify_archive(root: Path) -> dict[str, Any]:
                 )
             ):
                 errors.append("Unfiltered compliance archive is missing its source copy")
+        basic_message_files: set[str] = set()
+        basic_pdf_paths: set[str] = set()
         for record in records:
             identifier = record["id"]
             start = _integer(record["source_start"], "message.source_start")
             end = _integer(record["source_end"], "message.source_end")
             if selected_ranges.get(record["ordinal"]) != (start, end):
                 errors.append(f"Message source range differs from ledger: {identifier}")
-            for key in ("html_path", "eml_path", "search_text_path"):
-                reference(record.get(key), f"message {identifier} {key}")
-            eml = reference(record.get("eml_path"), f"message {identifier} EML")
+            if basic:
+                if any(record.get(key) for key in ("html_path", "eml_path", "search_text_path")):
+                    errors.append(f"Basic message contains an extra reading file: {identifier}")
+                pdf_relative = record.get("pdf_path")
+                if pdf_relative:
+                    if not str(pdf_relative).startswith("messages/"):
+                        errors.append(f"Basic PDF is outside messages/: {identifier}")
+                    if pdf_relative in basic_pdf_paths:
+                        errors.append(f"Duplicate basic PDF path: {pdf_relative}")
+                    basic_pdf_paths.add(pdf_relative)
+                    basic_message_files.add(pdf_relative)
+                eml = None
+            else:
+                for key in ("html_path", "eml_path", "search_text_path"):
+                    reference(record.get(key), f"message {identifier} {key}")
+                eml = reference(record.get("eml_path"), f"message {identifier} EML")
             if eml and hash_file(eml) != record["eml_sha256"]:
                 errors.append(f"EML hash mismatch: {identifier}")
             if record["render_status"] in ("rendered", "limited"):
@@ -215,6 +235,10 @@ def verify_archive(root: Path) -> dict[str, Any]:
                 errors.append(f"Failed render points at a PDF: {identifier}")
             for attachment in record.get("attachments", []):
                 relative = attachment["path"]
+                if basic:
+                    if not relative.startswith("messages/"):
+                        errors.append(f"Basic attachment is outside messages/: {relative}")
+                    basic_message_files.add(relative)
                 attachment_path = reference(relative, "attachment")
                 if attachment_path and (
                     hash_file(attachment_path) != attachment["sha256"]
@@ -273,6 +297,10 @@ def verify_archive(root: Path) -> dict[str, Any]:
                             errors.append(
                                 f"Compliance metadata {key} differs from message record: {identifier}"
                             )
+        if basic:
+            for relative in expected:
+                if relative.startswith("messages/") and relative not in basic_message_files:
+                    errors.append(f"Unexpected basic message file: {relative}")
         # Only generated reading pages are interpreted; HTML attachments are inert files.
         attachment_paths = {
             attachment["path"] for record in records for attachment in record.get("attachments", [])

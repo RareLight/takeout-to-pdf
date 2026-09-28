@@ -102,6 +102,39 @@ def test_offline_search_exact_facets_and_no_remote_requests(tmp_path, page):
 
 
 @pytest.mark.browser
+def test_basic_archive_index_searches_body_and_opens_pdf(tmp_path, page):
+    import mailbox
+    from email.message import EmailMessage
+    from urllib.parse import unquote, urlsplit
+
+    from takeout_to_pdf.archive import export_archive
+
+    source = tmp_path / "input.mbox"
+    box = mailbox.mbox(source)
+    message = EmailMessage()
+    message["From"] = "alice@example.com"
+    message["To"] = "reader@example.net"
+    message["Date"] = "Tue, 01 Sep 2026 12:00:00 +0000"
+    message["Subject"] = "Readable report"
+    message.set_content("UNIQUE_BASIC_BODY_MARKER")
+    box.add(message)
+    box.close()
+    archive = export_archive(source, tmp_path / "basic", basic=True)
+
+    page.goto((archive.path / "index.html").as_uri())
+    page.locator("#filters").wait_for(state="visible")
+    page.locator("#query").fill("UNIQUE_BASIC_BODY_MARKER")
+    row = page.locator("tr[data-message-id]:visible")
+    assert row.count() == 1
+    pdf_link = row.get_by_role("link", name="PDF")
+    href = pdf_link.get_attribute("href")
+    assert href is not None
+    assert (archive.path / unquote(urlsplit(href).path)).is_file()
+    page.locator("#query").fill("absent phrase")
+    assert page.locator("tr[data-message-id]:visible").count() == 0
+
+
+@pytest.mark.browser
 def test_email_html_is_inert_offline_and_remains_readable(tmp_path, page):
     from takeout_to_pdf.models import BodyPart, MessageRecord
     from takeout_to_pdf.render import render_message

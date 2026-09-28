@@ -457,6 +457,18 @@ def _stem(entry: dict[str, Any]) -> str:
     return f"{timestamp}__{sender}-to-{recipient}__{subject}__{entry['id']}"
 
 
+def _basic_stem(entry: dict[str, Any]) -> str:
+    timestamp = (
+        datetime.fromisoformat(entry["date_utc"]).strftime("%Y-%m-%dT%H%M%SZ")
+        if entry["date_utc"]
+        else "undated"
+    )
+    subject = safe_component(entry["subject"], 48)
+    sender = safe_component(next(iter(entry["senders"]), "unknown"), 26)
+    recipient = safe_component(next(iter(entry["recipients"]), "unknown"), 26)
+    return f"{timestamp}__{subject}__from-{sender}__to-{recipient}"
+
+
 def _message_directory(entry: dict[str, Any]) -> Path:
     if entry["date_utc"]:
         when = datetime.fromisoformat(entry["date_utc"])
@@ -546,6 +558,7 @@ def export_archive(
     filters: Filters | None = None,
     format: str = "directory",
     compliance: bool = False,
+    basic: bool = False,
     account_emails: list[str] | None = None,
     assume_timezone: str | None = None,
     render_timeout: float = 120,
@@ -562,6 +575,8 @@ def export_archive(
     accounts = {normalize_address(address) for address in account_emails or []}
     if format not in {"directory", "single-pdf"}:
         raise ValueError(f"Unsupported output format: {format}")
+    if basic and (compliance or format != "directory"):
+        raise ValueError("Basic mode cannot be combined with compliance or single-PDF format")
     if render_timeout <= 0:
         raise ValueError("Render timeout must be positive")
     if render_workers < 1:
@@ -602,6 +617,8 @@ def export_archive(
         )
         work = stage / "_work"
         work.mkdir()
+        if basic:
+            (stage / "messages").mkdir()
         database = sqlite3.connect(work / "records.sqlite")
         database.execute(
             "CREATE TABLE records (ordinal INTEGER PRIMARY KEY, start INTEGER, end INTEGER, date TEXT, metadata TEXT)"
@@ -694,8 +711,9 @@ def export_archive(
         nav_entries = [json.loads(row[4]) for row in rows]
         from .index import thread_paths, write_index
 
-        for item in nav_entries:
-            item["html_path"] = (_message_directory(item) / f"{_stem(item)}.html").as_posix()
+        if not basic:
+            for item in nav_entries:
+                item["html_path"] = (_message_directory(item) / f"{_stem(item)}.html").as_posix()
         conversation_paths = thread_paths(nav_entries)
         entries: list[dict[str, Any]] = []
         combined_name = f"{safe_component(source.stem)}__chronological__{run_id}.pdf"
@@ -711,6 +729,7 @@ def export_archive(
             deque()
         )
         completed = 0
+        used_basic_names: set[str] = set()
 
         def collect(
             entry: dict[str, Any],
@@ -734,10 +753,13 @@ def export_archive(
                 if pdf_path.exists():
                     pdf_path.unlink()
                 presentation["issues"] = entry["issues"]
-                html, _ = render_message(
-                    record, presentation, directory, compliance, asset_root=stage
-                )
-                (stage / entry["html_path"]).write_text(html, encoding="utf-8")
+                if not basic:
+                    html, _ = render_message(
+                        record, presentation, directory, compliance, asset_root=stage
+                    )
+                    (stage / entry["html_path"]).write_text(html, encoding="utf-8")
+            if basic:
+                (stage / entry.pop("html_path")).unlink(missing_ok=True)
             entry["source_status"] = "preserved"
             entry["attachment_status"] = (
                 "complete"
@@ -757,20 +779,35 @@ def export_archive(
                     raise RuntimeError(f"Source message {ordinal} changed during export")
                 record = _message(raw)
                 entry["issues"] = list(dict.fromkeys([*entry["issues"], *record.issues]))
-                directory_relative = _message_directory(entry)
+                directory_relative = (
+                    _message_directory(entry).parent if basic else _message_directory(entry)
+                )
                 directory = stage / directory_relative
-                directory.mkdir(parents=True)
-                stem = _stem(entry)
-                entry["eml_path"] = (directory_relative / f"{stem}.eml").as_posix()
+                directory.mkdir(parents=True, exist_ok=basic)
+                if basic:
+                    base = _basic_stem(entry)
+                    stem = base
+                    suffix = 2
+                    while (directory_relative / stem).as_posix().casefold() in used_basic_names:
+                        stem = f"{base}__{suffix}"
+                        suffix += 1
+                    used_basic_names.add((directory_relative / stem).as_posix().casefold())
+                else:
+                    stem = _stem(entry)
+                    entry["eml_path"] = (directory_relative / f"{stem}.eml").as_posix()
+                    (stage / entry["eml_path"]).write_bytes(raw.eml)
                 entry["html_path"] = (directory_relative / f"{stem}.html").as_posix()
-                entry["search_text_path"] = (directory_relative / f"{stem}.txt").as_posix()
+                entry["search_text_path"] = (
+                    (Path("_work") / f"{entry['id']}.txt").as_posix()
+                    if basic
+                    else (directory_relative / f"{stem}.txt").as_posix()
+                )
                 entry["pdf_path"] = (
                     (directory_relative / f"{stem}.pdf").as_posix()
                     if format == "directory"
                     else combined_name
                 )
                 entry["pdf_page"] = 1
-                (stage / entry["eml_path"]).write_bytes(raw.eml)
                 body_text = "\n\n".join(
                     BeautifulSoup(body.content, "html.parser").get_text(" ", strip=True)
                     if body.content_type == "text/html"
@@ -825,11 +862,11 @@ def export_archive(
                     "attachments": render_attachments,
                     "index_href": Path(os.path.relpath(stage / "index.html", directory)).as_posix(),
                 }
-                if index:
+                if index and not basic:
                     presentation["previous"] = Path(
                         os.path.relpath(stage / nav_entries[index - 1]["html_path"], directory)
                     ).as_posix()
-                if index + 1 < len(nav_entries):
+                if index + 1 < len(nav_entries) and not basic:
                     presentation["next"] = Path(
                         os.path.relpath(stage / nav_entries[index + 1]["html_path"], directory)
                     ).as_posix()
@@ -843,7 +880,7 @@ def export_archive(
                     if key in presentation
                 }
                 html, warnings = render_message(
-                    record, presentation, directory, compliance, asset_root=stage
+                    record, presentation, directory, compliance, asset_root=stage, basic=basic
                 )
                 entry["issues"].extend(warnings)
                 entry["issues"] = list(dict.fromkeys(entry["issues"]))
@@ -970,21 +1007,32 @@ def export_archive(
                 for name in ["weasyprint", "pypdf", "beautifulsoup4", "nh3"]
             },
         }
+        if basic:
+            manifest["basic"] = True
         _json(stage / "manifest.json", manifest)
-        _jsonl(stage / "messages.jsonl", entries)
         _jsonl(stage / "issues.jsonl", issues)
         reporter.stage("Building the offline browse index")
-        write_index(stage, entries, manifest)
-        (stage / "README.txt").write_text(
+        write_index(stage, entries, manifest, basic=basic)
+        if basic:
+            for entry in entries:
+                entry.pop("search_text_path", None)
+        _jsonl(stage / "messages.jsonl", entries)
+        readme = (
             "Open index.html to browse this offline mail archive.\n"
             "Message dates and directory names are ordered by UTC. Display/filter timezone is recorded in manifest.json.\n"
             "Attachments are beside their PDFs and share their identifying filename prefix.\n"
-            "Original message occurrences are never deduplicated. EML files retain MBOX From escaping.\n"
+        )
+        readme += (
+            "The messages tree contains only PDF reading views and saved attachments.\n"
+            if basic
+            else "Original message occurrences are never deduplicated. EML files retain MBOX From escaping.\n"
+        )
+        readme += (
             "Inspect issues.jsonl and manifest.json before treating this as a complete export.\n"
             "Run: takeout-to-pdf verify <archive-directory>\n"
-            "Checksums detect changes; they are not digital signatures or proof of sender authenticity.\n",
-            encoding="utf-8",
+            "Checksums detect changes; they are not digital signatures or proof of sender authenticity.\n"
         )
+        (stage / "README.txt").write_text(readme, encoding="utf-8")
         shutil.rmtree(work)
         (stage / "INCOMPLETE.txt").unlink()
         reporter.stage("Writing archive checksums")

@@ -32,6 +32,7 @@ def parser() -> argparse.ArgumentParser:
             "  takeout-to-pdf mail.mbox\n"
             "  takeout-to-pdf mail.mbox -o exports/archive --compliance\n"
             "  takeout-to-pdf mail.mbox --format single-pdf\n"
+            "  takeout-to-pdf mail.mbox --basic\n"
             "  takeout-to-pdf mail.mbox --sender alice@example.com --label Project\n"
             "  takeout-to-pdf mail.mbox --start-date 2005-12 --end-date 2007-06\n"
             "  takeout-to-pdf mail.mbox --has-attachments\n"
@@ -60,6 +61,11 @@ def parser() -> argparse.ArgumentParser:
         "--compliance",
         action="store_true",
         help="Add full headers, MIME details, and exact source records; copy the entire MBOX only without filters",
+    )
+    output.add_argument(
+        "--basic",
+        action="store_true",
+        help="Readable PDF and attachment filenames under messages/, plus HTML browse views",
     )
     selection = result.add_argument_group("Message selection (all messages by default)")
     selection.add_argument(
@@ -177,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
         cli.error("--attachment-scope requires --has-attachments")
     if args.render_workers < 1:
         cli.error("--render-workers must be a positive integer")
+    if args.basic and (args.compliance or args.format != "directory"):
+        cli.error("--basic cannot be combined with --compliance or --format single-pdf")
     filters = Filters(
         emails=args.email,
         senders=args.sender,
@@ -196,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             filters=filters,
             format=args.format,
             compliance=args.compliance,
+            basic=args.basic,
             account_emails=args.account_email,
             assume_timezone=args.assume_timezone,
             render_timeout=args.render_timeout,

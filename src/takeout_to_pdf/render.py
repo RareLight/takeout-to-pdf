@@ -224,6 +224,7 @@ def render_message(
     compliance: bool = False,
     *,
     asset_root: Path | None = None,
+    basic: bool = False,
 ) -> tuple[str, list[str]]:
     """Return a complete local HTML reading view and presentation limitations."""
     attachments = metadata.get("attachments", [])
@@ -263,8 +264,9 @@ def render_message(
             f'<section class="body">{f"<h2>{escape(label)}</h2>" if label else ""}{content}</section>'
         )
     if not record.bodies:
+        source_hint = "" if basic else " and the preserved EML source"
         sections.append(
-            '<p class="notice">No readable text body. See attachments and the preserved EML source.</p>'
+            f'<p class="notice">No readable text body. See attachments{source_hint}.</p>'
         )
     fields = [
         ("From", sender),
@@ -272,10 +274,12 @@ def render_message(
         ("Cc", metadata.get("cc_display", metadata.get("cc", record.cc_display))),
         ("Bcc", metadata.get("bcc_display", metadata.get("bcc", record.bcc_display))),
         ("Date", date),
-        ("Original Date header", metadata.get("date_original", record.date_raw)),
-        ("Labels", ", ".join(metadata.get("labels", record.labels))),
-        ("Message-ID", record.message_id),
     ]
+    if not basic:
+        fields.append(("Original Date header", metadata.get("date_original", record.date_raw)))
+    fields.append(("Labels", ", ".join(metadata.get("labels", record.labels))))
+    if not basic:
+        fields.append(("Message-ID", record.message_id))
     details = "".join(
         f"<dt>{escape(label)}</dt><dd>{escape(value)}</dd>" for label, value in fields if value
     )
@@ -283,15 +287,25 @@ def render_message(
     previews: list[str] = []
     for attachment in attachments:
         path = str(attachment.get("path", ""))
-        filename = attachment.get("filename", Path(path).name)
+        filename = attachment.get("original_filename" if basic else "filename", Path(path).name)
+        original_filename = (
+            ""
+            if basic
+            else f"Original filename: {escape(attachment.get('original_filename', filename))}<br>"
+        )
         annotation = "Inline resource" if attachment.get("inline") else "Attachment"
         if not attachment.get("decode_ok", True):
             annotation += "; decoding incomplete: preserved encoded bytes"
+        hash_detail = (
+            f'<br><span class="technical">SHA-256: {escape(attachment.get("sha256", ""))}</span>'
+            if not basic
+            else ""
+        )
         attachment_items.append(
             f'<li><a href="{escape(path)}">{escape(filename)}</a><br>'
-            f"Original filename: {escape(attachment.get('original_filename', filename))}<br>"
+            f"{original_filename}"
             f"{escape(annotation)}; {escape(attachment.get('content_type', ''))}"
-            f'<br><span class="technical">SHA-256: {escape(attachment.get("sha256", ""))}</span></li>'
+            f"{hash_detail}</li>"
         )
         if str(attachment.get("content_type", "")).startswith("image/") and not attachment.get(
             "inline"
@@ -331,12 +345,13 @@ def render_message(
             "in the source and separate attachment files, not printed here.</p></section>"
         )
     csp = "default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+    identifier_html = f'<p class="identifier">{escape(identifier)}</p>' if not basic else ""
     result = (
         f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<meta http-equiv="Content-Security-Policy" content="{escape(csp)}">'
         f"<title>{escape(subject)}</title><style>{CSS}</style></head><body><nav>{nav}</nav>"
-        f'<p class="context">{escape(context[:180])}</p><p class="identifier">{escape(identifier)}</p>'
+        f'<p class="context">{escape(context[:180])}</p>{identifier_html}'
         f"<h1>{escape(subject)}</h1><dl>{details}</dl>{limitations}{''.join(sections)}"
         f'<section><h2>Attachments ({len(attachments)})</h2><ul class="attachments">'
         f"{''.join(attachment_items)}</ul>{''.join(previews)}</section>{technical}</body></html>"

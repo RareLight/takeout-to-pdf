@@ -657,3 +657,23 @@ def test_render_pdf_pool_path_preserves_checks(tmp_path, monkeypatch):
     pdf.write_bytes(b"not a pdf")
     with pytest.raises(RuntimeError, match="did not produce a PDF"):
         _render_pdf(html, pdf, tmp_path, 10, StubPool(""))
+
+
+def test_basic_filename_is_bounded_and_windows_safe():
+    from takeout_to_pdf.archive import _basic_stem
+    from takeout_to_pdf.paths import safe_attachment_name
+
+    entry = {
+        "date_utc": "2026-09-01T12:00:00+00:00",
+        "subject": 'CON<>:"/\\|?*' + "界" * 100,
+        "senders": ["A" * 200 + "@example.com"],
+        "recipients": ["B" * 200 + "@example.net"],
+    }
+    stem = _basic_stem(entry)
+    attachment = f"{stem}__a001__{safe_attachment_name('evidence' * 100 + '.txt')}"
+    for name in (stem + ".pdf", attachment):
+        assert len(name.encode("utf-8")) <= 180
+        assert not any(character in name for character in '<>:"/\\|?*')
+        assert not name.endswith((" ", "."))
+    entry["subject"] = "CON"
+    assert _basic_stem(entry).split("__")[1] == "_CON"

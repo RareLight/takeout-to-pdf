@@ -20,6 +20,7 @@ def test_export_help_explains_defaults_filters_and_examples(capsys):
         "--end-date",
         "--has-attachments",
         "--compliance",
+        "--basic",
         "only without filters",
         "Examples:",
         "takeout-to-pdf mail.mbox",

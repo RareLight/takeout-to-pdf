@@ -10,7 +10,7 @@ from pypdf import PdfReader
 
 from takeout_to_pdf.archive import export_archive
 from takeout_to_pdf.filters import Filters
-from takeout_to_pdf.verify import verify_archive
+from takeout_to_pdf.verify import verify_archive, write_checksums
 
 
 def make_message(subject="Evidence", date="Tue, 01 Sep 2026 12:00:00 +0000"):
@@ -36,6 +36,131 @@ def make_box(tmp_path, messages):
 
 def records(output):
     return [json.loads(line) for line in (output / "messages.jsonl").read_text().splitlines()]
+
+
+def test_basic_export_has_readable_pdfs_attachments_and_browse_views(tmp_path):
+    message = make_message("Quarterly report")
+    message.add_attachment(
+        b"supporting data", maintype="text", subtype="plain", filename="notes.txt"
+    )
+    source = make_box(tmp_path, [message, message])
+
+    result = export_archive(source, tmp_path / "basic", basic=True)
+    entries = records(result.path)
+    assert result.status == 0
+    assert result.manifest["basic"] is True
+    assert len(entries) == 2
+    pdfs = [result.path / entry["pdf_path"] for entry in entries]
+    assert len(set(pdfs)) == 2
+    assert pdfs[0].parent == pdfs[1].parent == result.path / "messages/2026/09/01"
+    assert "Quarterly-report" in pdfs[0].name
+    assert "alice@example.com" in pdfs[0].name
+    assert "reader@example.net" in pdfs[0].name
+    assert "2026-09-01T120000Z" in pdfs[0].name
+    assert pdfs[1].stem == pdfs[0].stem + "__2"
+    for entry, pdf in zip(entries, pdfs, strict=True):
+        assert entry["id"] not in pdf.name
+        assert "eml_path" not in entry
+        assert "html_path" not in entry
+        assert "search_text_path" not in entry
+        attachment = result.path / entry["attachments"][0]["path"]
+        assert attachment.parent == pdf.parent
+        assert attachment.name.startswith(pdf.stem + "__a001__")
+        assert attachment.read_bytes() == b"supporting data"
+        text = " ".join(page.extract_text() for page in PdfReader(pdf).pages)
+        assert "Quarterly report" in text
+        assert "BODY_Quarterly report" in text
+        assert "Message-ID" not in text
+        assert "Original Date header" not in text
+        assert "Original filename:" not in text
+        assert "SHA-256" not in text
+    message_files = {
+        path.relative_to(result.path).as_posix()
+        for path in (result.path / "messages").rglob("*")
+        if path.is_file()
+    }
+    assert message_files == {
+        path
+        for entry in entries
+        for path in [entry["pdf_path"], *(item["path"] for item in entry["attachments"])]
+    }
+    index = (result.path / "index.html").read_text()
+    assert "Archive at a glance" in index
+    assert "Export scope and status" not in index
+    assert "dependencies" not in index
+    assert f"<small>{entries[0]['id']}</small>" not in index
+    assert (result.path / "browse/dates").is_dir()
+    assert "BODY_Quarterly report" in "".join(
+        path.read_text() for path in (result.path / "assets").glob("search-*.js")
+    )
+    assert verify_archive(result.path)["ok"]
+
+
+def test_basic_failed_pdf_keeps_no_message_html(tmp_path, monkeypatch):
+    from takeout_to_pdf import archive
+
+    source = make_box(tmp_path, [make_message()])
+
+    def fail_render(*args):
+        raise RuntimeError("synthetic renderer failure")
+
+    monkeypatch.setattr(archive, "_render_pdf", fail_render)
+    result = export_archive(source, tmp_path / "basic", basic=True)
+    entry = records(result.path)[0]
+    assert result.status == 1
+    assert entry["pdf_path"] is None
+    assert "html_path" not in entry
+    assert not list((result.path / "messages").rglob("*.html"))
+    assert verify_archive(result.path)["ok"]
+
+
+def test_basic_filenames_distinguish_case_only_subjects(tmp_path):
+    source = make_box(tmp_path, [make_message("Report"), make_message("report")])
+    result = export_archive(source, tmp_path / "basic", basic=True)
+    pdfs = [entry["pdf_path"] for entry in records(result.path)]
+    assert pdfs[0].casefold() != pdfs[1].casefold()
+    assert pdfs[1].endswith("__2.pdf")
+    assert verify_archive(result.path)["ok"]
+
+
+def test_basic_export_sanitizes_windows_unsafe_names(tmp_path):
+    message = make_message("Safe")
+    message.replace_header("Subject", "CON: quarterly / report? " + "界" * 100)
+    message.add_attachment(
+        b"evidence", maintype="application", subtype="octet-stream", filename="LPT1<>|?.txt"
+    )
+    source = make_box(tmp_path, [message])
+    result = export_archive(source, tmp_path / "basic", basic=True)
+    entry = records(result.path)[0]
+    filenames = [
+        (result.path / entry["pdf_path"]).name,
+        (result.path / entry["attachments"][0]["path"]).name,
+    ]
+    for filename in filenames:
+        assert len(filename.encode("utf-8")) <= 180
+        assert not any(character in filename for character in '<>:"/\\|?*')
+        assert not filename.endswith((" ", "."))
+    assert verify_archive(result.path)["ok"]
+
+
+def test_basic_verifier_rejects_extra_message_file(tmp_path):
+    source = make_box(tmp_path, [make_message()])
+    result = export_archive(source, tmp_path / "basic", basic=True)
+    (result.path / "messages" / "extra.html").write_text("unexpected reading view")
+    write_checksums(result.path)
+    assert not verify_archive(result.path)["ok"]
+
+
+def test_basic_zero_match_is_valid(tmp_path):
+    source = make_box(tmp_path, [make_message()])
+    result = export_archive(
+        source, tmp_path / "basic", basic=True, filters=Filters(senders=["other@example.com"])
+    )
+    assert result.status == 0
+    assert records(result.path) == []
+    assert list((result.path / "messages").rglob("*")) == []
+    assert (result.path / "index.html").is_file()
+    assert verify_archive(result.path)["ok"]
 
 
 def test_default_full_export_preserves_source_attachments_and_duplicates(tmp_path):
