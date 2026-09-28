@@ -120,6 +120,97 @@ def test_basic_external_image_notice_is_absent_from_pdf_and_issue_log(tmp_path):
     assert verify_archive(result.path)["ok"]
 
 
+@pytest.mark.parametrize("mode", ["basic", "default", "compliance"])
+def test_uses_preferred_mime_body_without_printing_tracking_urls(tmp_path, mode):
+    message = make_message("Readable newsletter")
+    message.set_content(
+        "Readable article Read more https://example.test/PLAIN_TRACKING_" + "x" * 1500
+    )
+    message.add_alternative(
+        '<p>Readable article <a href="https://example.test/HTML_TRACKING_'
+        + "y" * 1500
+        + '">Read more</a></p>',
+        subtype="html",
+    )
+    message.add_attachment(
+        b"\x00\xfforiginal media",
+        maintype="application",
+        subtype="octet-stream",
+        filename="media.bin",
+    )
+    source = make_box(tmp_path, [message])
+
+    result = export_archive(
+        source, tmp_path / mode, basic=mode == "basic", compliance=mode == "compliance"
+    )
+    entry = records(result.path)[0]
+    reader = PdfReader(result.path / entry["pdf_path"])
+    pdf_text = " ".join(page.extract_text() for page in reader.pages)
+    search_data = "".join(path.read_text() for path in (result.path / "assets").glob("search-*.js"))
+    assert "Readable article" in pdf_text and "Read more" in pdf_text
+    assert "PLAIN_TRACKING_" not in pdf_text
+    assert "PLAIN_TRACKING_" not in search_data
+    assert "HTML_TRACKING_" not in pdf_text
+    if mode != "compliance":
+        assert len(reader.pages) == 1
+    assert any(
+        "HTML_TRACKING_" in str(annotation.get_object().get("/A", {}).get("/URI", ""))
+        for page in reader.pages
+        for annotation in page.get("/Annots", [])
+    )
+    assert (result.path / entry["attachments"][0]["path"]).read_bytes() == b"\x00\xfforiginal media"
+    if mode != "basic":
+        assert "PLAIN_TRACKING_" in (result.path / entry["eml_path"]).read_text()
+
+
+@pytest.mark.parametrize("mode", ["basic", "default", "compliance"])
+def test_unique_plain_alternative_remains_readable_and_searchable(tmp_path, mode):
+    message = make_message("Unique alternate")
+    message.set_content("Unique human note https://example.test/LONG_TOKEN_" + "x" * 500)
+    message.add_alternative("<p>Common HTML note</p>", subtype="html")
+    source = make_box(tmp_path, [message])
+
+    result = export_archive(
+        source, tmp_path / mode, basic=mode == "basic", compliance=mode == "compliance"
+    )
+    entry = records(result.path)[0]
+    pdf_text = " ".join(
+        page.extract_text() for page in PdfReader(result.path / entry["pdf_path"]).pages
+    )
+    search_data = "".join(path.read_text() for path in (result.path / "assets").glob("search-*.js"))
+    assert "Common HTML note" in pdf_text
+    assert "Unique human note" in pdf_text
+    assert "Unique human note" in search_data
+    assert "x" * 200 not in pdf_text
+    assert "x" * 200 not in search_data
+
+
+@pytest.mark.parametrize("mode", ["basic", "default", "compliance"])
+def test_image_only_alternative_uses_plain_fallback_and_reports_by_mode(tmp_path, mode):
+    message = make_message("Image fallback")
+    message.set_content("Readable fallback")
+    message.add_alternative('<img src="https://remote.test/pixel">', subtype="html")
+    source = make_box(tmp_path, [message])
+
+    result = export_archive(
+        source, tmp_path / mode, basic=mode == "basic", compliance=mode == "compliance"
+    )
+    entry = records(result.path)[0]
+    pdf_text = " ".join(
+        page.extract_text() for page in PdfReader(result.path / entry["pdf_path"]).pages
+    )
+    issue_log = (result.path / "issues.jsonl").read_text()
+    assert "Readable fallback" in pdf_text
+    assert "Image unavailable" not in pdf_text
+    if mode == "basic":
+        assert result.status == 0
+        assert issue_log == ""
+    else:
+        assert result.status == 1
+        assert "Unavailable external or untrusted image resource" in issue_log
+    assert verify_archive(result.path)["ok"]
+
+
 def test_basic_failed_pdf_keeps_no_message_html(tmp_path, monkeypatch):
     from takeout_to_pdf import archive
 

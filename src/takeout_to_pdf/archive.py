@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 from . import __version__
 from .dates import DateInfo, parse_date
 from .filters import Filters, normalize_address, prepare, select
-from .mime import parse_headers, parse_message
+from .mime import parse_headers, parse_message, presentation_bodies
 from .models import MessageRecord
 from .paths import hash_file, publish_directory, safe_attachment_name, safe_component, sha256
 from .source import iter_records, read_record
@@ -820,7 +820,7 @@ def export_archive(
                     BeautifulSoup(body.content, "html.parser").get_text(" ", strip=True)
                     if body.content_type == "text/html"
                     else body.content
-                    for body in record.bodies
+                    for body in presentation_bodies(record)
                 )
                 (stage / entry["search_text_path"]).write_text(body_text, encoding="utf-8")
                 if compliance:

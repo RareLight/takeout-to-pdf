@@ -17,6 +17,17 @@ def test_empty_plain_alternative_does_not_hide_html():
     assert "unique HTML evidence" in chosen[0].content
 
 
+def test_image_only_html_alternative_keeps_readable_plain_body():
+    message = EmailMessage()
+    message.set_content("Readable plain fallback")
+    message.add_alternative('<img src="https://remote.test/pixel">', subtype="html")
+    parsed = parse_message(message.as_bytes())
+    chosen = [part for part in parsed.bodies if not part.alternative]
+    assert len(chosen) == 1
+    assert chosen[0].content_type == "text/plain"
+    assert "Readable plain fallback" in chosen[0].content
+
+
 def test_text_attachment_never_becomes_body_and_mixed_sections_survive():
     message = EmailMessage()
     message.make_mixed()

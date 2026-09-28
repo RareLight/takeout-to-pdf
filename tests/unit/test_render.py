@@ -1,3 +1,5 @@
+import pytest
+
 from takeout_to_pdf.models import BodyPart, MessageRecord
 from takeout_to_pdf.render import render_message, safe_fetcher
 
@@ -58,7 +60,7 @@ def test_basic_omits_external_image_notices_but_preserves_other_image_issues(tmp
         )
 
 
-def test_alternatives_and_full_repeated_headers_are_visible(tmp_path):
+def test_compliance_shows_full_repeated_headers_and_unique_secondary_body(tmp_path):
     record = MessageRecord(
         headers=[("Received", "first"), ("Received", "second")],
         bodies=[
@@ -67,9 +69,97 @@ def test_alternatives_and_full_repeated_headers_are_visible(tmp_path):
         ],
     )
     result, _ = render_message(record, {"id": "m1"}, tmp_path, compliance=True)
-    assert "unique alternative" in result and "Alternative" in result
+    assert "primary" in result
+    assert "unique alternative" in result
     assert "first" in result and "second" in result
     assert result.count("<dt>Received</dt>") == 2
+
+
+@pytest.mark.parametrize("options", [{}, {"basic": True}, {"compliance": True}])
+def test_renders_only_selected_mime_bodies(tmp_path, options):
+    record = MessageRecord(
+        bodies=[
+            BodyPart("text/plain", "Chosen HTML", "1.1", True),
+            BodyPart("text/html", "<p>Chosen HTML</p>", "1.2"),
+            BodyPart("text/plain", "Separate mixed section", "2"),
+        ]
+    )
+    rendered, _ = render_message(record, {"id": "m1"}, tmp_path, **options)
+    assert rendered.count("Chosen HTML") == 1
+    assert "Separate mixed section" in rendered
+    assert "Alternative representation" not in rendered
+
+
+@pytest.mark.parametrize("options", [{}, {"basic": True}, {"compliance": True}])
+def test_keeps_unique_plain_alternative_and_shortens_long_url(tmp_path, options):
+    record = MessageRecord(
+        bodies=[
+            BodyPart(
+                "text/plain", "Unique human note https://example.test/" + "x" * 500, "1.1", True
+            ),
+            BodyPart("text/html", "<p>Common HTML note</p>", "1.2"),
+        ]
+    )
+    rendered, _ = render_message(record, {"id": "m1"}, tmp_path, **options)
+    assert "Common HTML note" in rendered
+    assert "Unique human note" in rendered
+    assert "Additional text" in rendered
+    assert "x" * 200 not in rendered
+    assert "example.test" in rendered
+
+
+def test_keeps_alternative_when_punctuation_changes_the_meaning(tmp_path):
+    record = MessageRecord(
+        bodies=[
+            BodyPart("text/plain", "I can", "1.1", True),
+            BodyPart("text/html", "<p>I can't</p>", "1.2"),
+        ]
+    )
+    rendered, _ = render_message(record, {"id": "m1"}, tmp_path)
+    assert "I can</div>" in rendered
+    assert "I can't" in rendered
+
+
+def test_plain_only_body_keeps_prose_and_short_links_without_long_url_noise(tmp_path):
+    record = MessageRecord(
+        bodies=[
+            BodyPart(
+                "text/plain",
+                "Invoice at https://example.test/invoice and details at "
+                + "https://example.test/"
+                + "x" * 500
+                + " plus embedded media data:image/png;base64,"
+                + "A" * 500,
+                "1",
+            )
+        ]
+    )
+    rendered, _ = render_message(record, {"id": "m1"}, tmp_path)
+    assert "Invoice at https://example.test/invoice" in rendered
+    assert "Long link to example.test" in rendered
+    assert "Embedded data resource" in rendered
+    assert "x" * 200 not in rendered
+    assert "A" * 200 not in rendered
+
+
+@pytest.mark.parametrize("options", [{}, {"compliance": True}])
+def test_hidden_html_alternative_still_reports_blocked_image_in_detailed_modes(tmp_path, options):
+    record = MessageRecord(
+        bodies=[
+            BodyPart("text/plain", "Readable fallback", "1.1"),
+            BodyPart(
+                "text/html",
+                '<img src="https://remote.test/pixel" alt="tracking image">',
+                "1.2",
+                True,
+            ),
+        ]
+    )
+    rendered, issues = render_message(record, {"id": "m1"}, tmp_path, **options)
+    assert "Readable fallback" in rendered
+    assert "Image unavailable" not in rendered
+    assert "Unavailable external or untrusted image resource" in rendered
+    assert any("Unavailable external or untrusted image resource" in issue for issue in issues)
 
 
 def test_fetcher_rejects_network_traversal_and_svg(tmp_path):

@@ -15,6 +15,7 @@ from urllib.request import url2pathname
 import nh3
 from PIL import Image
 
+from .mime import presentation_bodies
 from .models import MessageRecord
 
 CSS = """
@@ -51,7 +52,6 @@ h1, h2, h3, dt { break-after: avoid; }
 @media print {
   body { max-width: none; margin: 0; padding: 0; }
   nav { display: none; }
-  a[href^="http"]::after { content: ' (' attr(href) ')'; font-size: 9pt; }
   .notice { background: none; }
 }
 """
@@ -250,12 +250,8 @@ def render_message(
     )
     sections: list[str] = []
     issues: list[str] = []
-    for body in record.bodies:
-        label = (
-            f"Alternative representation ({body.content_type}, MIME part {body.mime_path})"
-            if body.alternative
-            else ""
-        )
+    readable_bodies = presentation_bodies(record)
+    for body in readable_bodies:
         if body.content_type == "text/html":
             content, warnings = _sanitized(
                 body.content, attachments, directory, asset_root or directory, basic
@@ -263,10 +259,17 @@ def render_message(
             issues.extend(warnings)
         else:
             content = f'<div class="plain">{escape(body.content)}</div>'
-        sections.append(
-            f'<section class="body">{f"<h2>{escape(label)}</h2>" if label else ""}{content}</section>'
-        )
-    if not record.bodies:
+        label = "<h2>Additional text from another version</h2>" if body.alternative else ""
+        sections.append(f'<section class="body">{label}{content}</section>')
+    if not basic:
+        shown_html = {id(body) for body in readable_bodies if body.content_type == "text/html"}
+        for body in record.bodies:
+            if body.content_type == "text/html" and id(body) not in shown_html:
+                _, warnings = _sanitized(
+                    body.content, attachments, directory, asset_root or directory, basic
+                )
+                issues.extend(warnings)
+    if not readable_bodies:
         source_hint = "" if basic else " and the preserved EML source"
         sections.append(
             f'<p class="notice">No readable text body. See attachments{source_hint}.</p>'

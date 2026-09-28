@@ -8,6 +8,7 @@ import mimetypes
 import quopri
 import re
 import unicodedata
+from dataclasses import replace
 from email import policy
 from email.errors import HeaderParseError
 from email.header import decode_header
@@ -15,7 +16,7 @@ from email.message import Message
 from email.parser import BytesHeaderParser, BytesParser, HeaderParser
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from .models import Attachment, BodyPart, MessageRecord
 
@@ -25,6 +26,8 @@ _CONTROL_TYPES = {
     "application/x-pkcs7-signature",
     "application/pgp-encrypted",
 }
+_URL = re.compile(r"(?:https?://|data:)[^\s<>()]+", re.IGNORECASE)
+_MAX_VISIBLE_URL_LENGTH = 160
 
 
 class _ResourceReferences(HTMLParser):
@@ -36,6 +39,99 @@ class _ResourceReferences(HTMLParser):
         for name, value in attrs:
             if name in ("src", "href", "background", "poster", "data") and value:
                 self.values.add(unquote(value.strip()))
+
+
+class _ReadableHTML(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.hidden = 0
+        self.text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"head", "script", "style", "template", "svg", "math"}:
+            self.hidden += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"head", "script", "style", "template", "svg", "math"} and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self.hidden and data.strip():
+            self.text.append(data)
+
+
+def _visible_html_text(content: str) -> str:
+    parser = _ReadableHTML()
+    parser.feed(content)
+    return " ".join(parser.text)
+
+
+def _readable_html(content: str) -> bool:
+    return bool(_visible_html_text(content))
+
+
+def _without_long_urls(content: str) -> str:
+    return _URL.sub(
+        lambda match: "" if len(match.group()) > _MAX_VISIBLE_URL_LENGTH else match.group(),
+        content,
+    )
+
+
+def _shorten_long_urls(content: str) -> str:
+    def shorten(match: re.Match[str]) -> str:
+        url = match.group()
+        if len(url) <= _MAX_VISIBLE_URL_LENGTH:
+            return url
+        if url.lower().startswith("data:"):
+            return "[Embedded data resource; full content in original email]"
+        try:
+            host = urlsplit(url).hostname or "external site"
+        except ValueError:
+            host = "external site"
+        return f"[Long link to {host[:_MAX_VISIBLE_URL_LENGTH]}; full URL in original email]"
+
+    return _URL.sub(shorten, content)
+
+
+def _comparison_key(content: str) -> str:
+    return " ".join(unicodedata.normalize("NFC", content).casefold().split())
+
+
+def presentation_bodies(record: MessageRecord) -> list[BodyPart]:
+    """Keep chosen bodies and secondary text not already present in them."""
+    primary = [body for body in record.bodies if not body.alternative]
+    reference = {
+        _comparison_key(
+            _visible_html_text(body.content)
+            if body.content_type == "text/html"
+            else _without_long_urls(body.content)
+        )
+        for body in primary
+    }
+    result = [
+        replace(body, content=_shorten_long_urls(body.content))
+        if body.content_type == "text/plain"
+        else body
+        for body in primary
+    ]
+    for body in record.bodies:
+        if not body.alternative:
+            continue
+        visible = (
+            _visible_html_text(body.content)
+            if body.content_type == "text/html"
+            else _without_long_urls(body.content)
+        )
+        key = _comparison_key(visible)
+        if not key or key in reference:
+            continue
+        result.append(
+            replace(body, content=_shorten_long_urls(body.content))
+            if body.content_type == "text/plain"
+            else body
+        )
+        reference.add(key)
+    return result
 
 
 def _issue(record: MessageRecord, message: str, field: str = "") -> None:
@@ -340,7 +436,12 @@ def parse_message(eml: bytes) -> MessageRecord:
                     useful = [
                         group
                         for group in groups
-                        if any(body.content.strip() and not body.alternative for body in group)
+                        if any(
+                            body.content.strip()
+                            and not body.alternative
+                            and (body.content_type != "text/html" or _readable_html(body.content))
+                            for body in group
+                        )
                     ]
                     chosen = next(
                         (
@@ -348,12 +449,21 @@ def parse_message(eml: bytes) -> MessageRecord:
                             for group in reversed(useful)
                             if any(
                                 body.content_type == "text/html"
-                                and body.content.strip()
+                                and _readable_html(body.content)
                                 and not body.alternative
                                 for body in group
                             )
                         ),
-                        useful[-1] if useful else [],
+                        useful[-1]
+                        if useful
+                        else next(
+                            (
+                                group
+                                for group in reversed(groups)
+                                if any(body.content.strip() for body in group)
+                            ),
+                            [],
+                        ),
                     )
                     for group in groups:
                         if group is not chosen:
