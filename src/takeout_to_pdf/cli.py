@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from time import monotonic
 from zoneinfo import ZoneInfoNotFoundError
 
 from . import __version__
@@ -173,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         report = verify_archive(args.archive)
         print(json.dumps(report, indent=2))
         return 0 if report["ok"] else 1
+    started = monotonic()
     cli = parser()
     args = cli.parse_args(argv)
     if args.input is None and args.legacy_input is None:
@@ -255,4 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         if result.status == 0
         else "Incomplete: inspect issues.jsonl and the index before relying on this export."
     )
+    hours, remaining = divmod(round(monotonic() - started), 3600)
+    minutes, seconds = divmod(remaining, 60)
+    print(f"Total processing time: {hours:02}:{minutes:02}:{seconds:02}")
     return result.status

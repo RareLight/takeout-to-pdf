@@ -124,6 +124,15 @@ def test_cli_accepts_mbox_as_first_positional_argument(source, tmp_path):
     assert selected(type("Result", (), {"path": output})()) == ["BEFORE", "START"]
 
 
+def test_cli_reports_total_processing_time(source, tmp_path, monkeypatch, capsys):
+    from takeout_to_pdf import cli
+
+    times = iter((100.0, 6105.0))
+    monkeypatch.setattr(cli, "monotonic", lambda: next(times))
+    assert main([str(source), "-o", str(tmp_path / "timed"), "--sender", "nobody@example.com"]) == 0
+    assert "Total processing time: 01:40:05" in capsys.readouterr().out
+
+
 def test_cli_rejects_missing_or_duplicate_input(source, tmp_path, capsys):
     with pytest.raises(SystemExit) as missing:
         main([])
