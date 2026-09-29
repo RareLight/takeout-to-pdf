@@ -27,14 +27,15 @@ CSS = """
   @bottom-right { content: 'Page ' counter(page) ' of ' counter(pages); font: 8pt sans-serif; }
 }
 * { box-sizing: border-box; }
-body { string-set: archive attr(data-archive-label); font: 11pt/1.5 sans-serif; color: #19222b;
+body { string-set: archive attr(data-archive-label), context attr(data-page-context);
+       font: 11pt/1.5 sans-serif; color: #19222b;
        max-width: 960px; margin: 2rem auto; padding: 0 1rem;
        overflow-wrap: anywhere; }
 a { color: #175785; overflow-wrap: anywhere; }
 h1 { font-size: 21pt; line-height: 1.25; margin: 1rem 0; bookmark-level: 1; }
 h2 { font-size: 14pt; margin-top: 1.5rem; bookmark-level: 2; }
 h3 { font-size: 12pt; bookmark-level: 3; }
-.context { string-set: context content(); font-size: 9pt; color: #555; }
+.context { font-size: 9pt; color: #555; }
 .identifier { font-size: 9pt; color: #555; }
 dl { margin: .5rem 0 1.5rem; }
 dt { font-weight: 600; margin-top: .4rem; }
@@ -54,6 +55,7 @@ h1, h2, h3, dt { break-after: avoid; }
 @media print {
   body { max-width: none; margin: 0; padding: 0; }
   nav { display: none; }
+  .context { display: none; }
   .notice { background: none; }
 }
 """
@@ -375,7 +377,7 @@ def render_message(
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<meta http-equiv="Content-Security-Policy" content="{escape(csp)}">'
         f"<title>{escape(subject)}</title><style>{css}</style></head>"
-        f'<body data-archive-label="{escape(archive_label)}"><nav>{nav}</nav>'
+        f'<body data-archive-label="{escape(archive_label)}" data-page-context="{escape(context[:180])}"><nav>{nav}</nav>'
         f'<p class="context">{escape(context[:180])}</p>{identifier_html}'
         f"<h1>{escape(subject)}</h1><dl>{details}</dl>{limitations}{''.join(sections)}"
         f'<section><h2>Attachments ({len(attachments)})</h2><ul class="attachments">'

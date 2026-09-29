@@ -50,6 +50,24 @@ def test_pdf_retains_last_line_bookmarks_and_page_context(tmp_path):
     assert not issues
 
 
+@pytest.mark.parametrize("options", [{}, {"basic": True}, {"compliance": True}])
+def test_pdf_shows_page_context_only_in_running_header(tmp_path, options):
+    record = MessageRecord(
+        subject="Archival subject",
+        from_display="Alice <alice@example.com>",
+        bodies=[BodyPart("text/plain", "Message body\n" * 160, "1")],
+    )
+    context = "2020-01-01 UTC | Alice <alice@example.com>"
+    document, _ = render_message(record, {"date_display": "2020-01-01 UTC"}, tmp_path, **options)
+    assert f'<p class="context">{context.replace("<", "&lt;").replace(">", "&gt;")}</p>' in document
+    target = tmp_path / "message.pdf"
+    write_pdf(document, target, tmp_path)
+    pages = PdfReader(target).pages
+    assert len(pages) > 1
+    for page in pages:
+        assert page.extract_text().count(context) == 1
+
+
 def test_pdf_attachment_links_remain_relative_after_archive_move(tmp_path):
     from pypdf.generic import DictionaryObject
 
