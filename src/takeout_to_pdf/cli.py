@@ -142,7 +142,7 @@ def parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="ADDRESS",
-        help="Own address for incoming/outgoing browse views; repeatable, does not filter",
+        help="Own address for incoming/outgoing views; one address labels PDF footers; does not filter",
     )
     presentation.add_argument(
         "--render-timeout",

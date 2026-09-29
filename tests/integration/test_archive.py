@@ -40,6 +40,21 @@ def records(output):
     return [json.loads(line) for line in (output / "messages.jsonl").read_text().splitlines()]
 
 
+@pytest.mark.parametrize(
+    "options",
+    [{}, {"basic": True}, {"compliance": True}, {"format": "single-pdf"}],
+)
+def test_exported_pdf_footer_uses_account_email(tmp_path, options):
+    source = make_box(tmp_path, [make_message()])
+    result = export_archive(
+        source, tmp_path / "archive", account_emails=["owner@example.net"], **options
+    )
+    entry = records(result.path)[0]
+    pdf = result.path / entry["pdf_path"]
+    page = PdfReader(pdf).pages[entry["pdf_page"] - 1]
+    assert "Google Takeout - Gmail Archive: owner@example.net" in page.extract_text()
+
+
 def test_basic_export_has_readable_pdfs_attachments_and_browse_views(tmp_path):
     message = make_message("Quarterly report")
     message.add_attachment(

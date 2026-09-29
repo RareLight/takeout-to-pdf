@@ -83,7 +83,7 @@ uv run takeout-to-pdf takeout.mbox --timezone America/Chicago --start-date 2012
 
 Date boundaries may be a whole year (`YYYY`), month (`YYYY-MM`), or ISO day (`YYYY-MM-DD`). Both endpoints are inclusive at the precision you specify. `2005-12` through `2007-06` includes every instant in June 2007; the default calendar timezone is UTC. A different IANA timezone affects date filtering and displayed dates, while directory chronology stays UTC. Bad or missing Date headers remain visible under `undated` when no date filter is set. A date-filtered run reports those messages as unresolved unless `--include-undated` is used. `--assume-timezone` gives an explicit interpretation to genuinely timezone-less dates.
 
-`--has-attachments` counts ordinary file attachments by default. `--attachment-scope all` also counts embedded resources; all recognized attachments and inline resources from selected messages are saved either way. `--account-email` may be repeated to enable incoming/outgoing views; it is not a selection filter.
+`--has-attachments` counts ordinary file attachments by default. `--attachment-scope all` also counts embedded resources; all recognized attachments and inline resources from selected messages are saved either way. `--account-email` may be repeated to enable incoming/outgoing views; it is not a selection filter. With exactly one account address, message PDF footers show `Google Takeout - Gmail Archive: address`. With none or multiple, they show `Google Takeout - Gmail Archive`.
 
 ## Compliance and integrity
 

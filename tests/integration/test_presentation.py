@@ -1,7 +1,30 @@
+import pytest
 from pypdf import PdfReader
 
 from takeout_to_pdf.models import BodyPart, MessageRecord
 from takeout_to_pdf.render import render_message, write_pdf
+
+
+@pytest.mark.parametrize(
+    ("accounts", "expected"),
+    [
+        ([], "Google Takeout - Gmail Archive"),
+        (["owner@example.com"], "Google Takeout - Gmail Archive: owner@example.com"),
+        (["owner@example.com", "alias@example.com"], "Google Takeout - Gmail Archive"),
+    ],
+)
+def test_pdf_footer_identifies_explicit_mailbox_only_when_unambiguous(tmp_path, accounts, expected):
+    document, _ = render_message(
+        MessageRecord(bodies=[BodyPart("text/plain", "Message body", "1")]),
+        {"id": "m1", "account_emails": accounts},
+        tmp_path,
+    )
+    target = tmp_path / "message.pdf"
+    write_pdf(document, target, tmp_path)
+    text = PdfReader(target).pages[0].extract_text()
+    assert expected in text
+    if len(accounts) != 1:
+        assert "owner@example.com" not in text
 
 
 def test_pdf_retains_last_line_bookmarks_and_page_context(tmp_path):

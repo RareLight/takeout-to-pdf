@@ -22,11 +22,13 @@ CSS = """
 @page {
   size: A4; margin: 21mm 17mm 20mm;
   @top-left { content: string(context); font: 8pt sans-serif; color: #555; }
-  @bottom-left { content: 'Mail archive · ' string(identifier); font: 8pt sans-serif; color: #555; }
+  @bottom-left { content: string(archive); font: 8pt sans-serif; color: #555;
+                 max-width: 140mm; overflow-wrap: anywhere; }
   @bottom-right { content: 'Page ' counter(page) ' of ' counter(pages); font: 8pt sans-serif; }
 }
 * { box-sizing: border-box; }
-body { font: 11pt/1.5 sans-serif; color: #19222b; max-width: 960px; margin: 2rem auto; padding: 0 1rem;
+body { string-set: archive attr(data-archive-label); font: 11pt/1.5 sans-serif; color: #19222b;
+       max-width: 960px; margin: 2rem auto; padding: 0 1rem;
        overflow-wrap: anywhere; }
 a { color: #175785; overflow-wrap: anywhere; }
 h1 { font-size: 21pt; line-height: 1.25; margin: 1rem 0; bookmark-level: 1; }
@@ -235,6 +237,10 @@ def render_message(
     identifier = metadata.get("id", "")
     date = metadata.get("date_display") or "Undated / unorderable"
     sender = metadata.get("from_display", metadata.get("from", record.from_display))
+    accounts = metadata.get("account_emails", [])
+    archive_label = "Google Takeout - Gmail Archive"
+    if len(accounts) == 1:
+        archive_label += f": {accounts[0]}"
     context = f"{date} | {sender}"
     navigation = [
         ("index_href", "Archive index"),
@@ -356,7 +362,8 @@ def render_message(
         f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<meta http-equiv="Content-Security-Policy" content="{escape(csp)}">'
-        f"<title>{escape(subject)}</title><style>{CSS}</style></head><body><nav>{nav}</nav>"
+        f"<title>{escape(subject)}</title><style>{CSS}</style></head>"
+        f'<body data-archive-label="{escape(archive_label)}"><nav>{nav}</nav>'
         f'<p class="context">{escape(context[:180])}</p>{identifier_html}'
         f"<h1>{escape(subject)}</h1><dl>{details}</dl>{limitations}{''.join(sections)}"
         f'<section><h2>Attachments ({len(attachments)})</h2><ul class="attachments">'

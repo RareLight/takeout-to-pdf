@@ -867,6 +867,7 @@ def export_archive(
                     )
                 presentation = {
                     **entry,
+                    "account_emails": sorted(accounts),
                     "attachments": render_attachments,
                     "index_href": Path(os.path.relpath(stage / "index.html", directory)).as_posix(),
                 }
@@ -951,6 +952,7 @@ def export_archive(
                     presentation = {
                         **entry,
                         **entry["_navigation"],
+                        "account_emails": sorted(accounts),
                         "attachments": rendered_attachments,
                         "pdf_href": pdf_href,
                     }
