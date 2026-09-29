@@ -6,6 +6,7 @@ import concurrent.futures
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import queue
 import shutil
@@ -577,8 +578,8 @@ def export_archive(
         raise ValueError(f"Unsupported output format: {format}")
     if basic and (compliance or format != "directory"):
         raise ValueError("Basic mode cannot be combined with compliance or single-PDF format")
-    if render_timeout <= 0:
-        raise ValueError("Render timeout must be positive")
+    if not math.isfinite(render_timeout) or render_timeout <= 0:
+        raise ValueError("Render timeout must be positive and finite")
     if render_workers < 1:
         raise ValueError("Render workers must be positive")
     run_id = uuid.uuid4().hex[:8]
@@ -754,6 +755,7 @@ def export_archive(
                 if pdf_path.exists():
                     pdf_path.unlink()
                 presentation["issues"] = entry["issues"]
+                presentation.pop("pdf_href", None)
                 if not basic:
                     html, _ = render_message(
                         record, presentation, directory, compliance, asset_root=stage
@@ -871,6 +873,11 @@ def export_archive(
                     "attachments": render_attachments,
                     "index_href": Path(os.path.relpath(stage / "index.html", directory)).as_posix(),
                 }
+                if format == "directory":
+                    presentation["pdf_href"] = Path(
+                        os.path.relpath(stage / entry["pdf_path"], directory)
+                    ).as_posix()
+                presentation["combined_pdf"] = format == "single-pdf"
                 if index and not basic:
                     presentation["previous"] = Path(
                         os.path.relpath(stage / nav_entries[index - 1]["html_path"], directory)
@@ -954,7 +961,8 @@ def export_archive(
                         **entry["_navigation"],
                         "account_emails": sorted(accounts),
                         "attachments": rendered_attachments,
-                        "pdf_href": pdf_href,
+                        "pdf_href": pdf_href if entry.get("pdf_path") else "",
+                        "combined_pdf": True,
                     }
                     html, warnings = render_message(
                         record, presentation, directory, compliance, asset_root=stage

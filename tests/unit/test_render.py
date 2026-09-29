@@ -220,3 +220,16 @@ def test_svg_is_saved_but_never_previewed(tmp_path):
     assert 'href="drawing.svg"' in rendered
     assert 'src="drawing.svg"' not in rendered
     assert any("preview unavailable" in item for item in issues)
+
+
+@pytest.mark.parametrize("options", [{}, {"basic": True}, {"compliance": True}])
+def test_case_distinct_alternative_bodies_both_render(tmp_path, options):
+    record = MessageRecord(
+        bodies=[
+            BodyPart("text/plain", "aBc123", "1.1", True),
+            BodyPart("text/html", "<p>AbC123</p>", "1.2"),
+        ]
+    )
+    rendered, _ = render_message(record, {"id": "m1"}, tmp_path, **options)
+    assert "aBc123" in rendered
+    assert "AbC123" in rendered

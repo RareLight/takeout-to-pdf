@@ -35,7 +35,7 @@ h1 { font-size: 21pt; line-height: 1.25; margin: 1rem 0; bookmark-level: 1; }
 h2 { font-size: 14pt; margin-top: 1.5rem; bookmark-level: 2; }
 h3 { font-size: 12pt; bookmark-level: 3; }
 .context { string-set: context content(); font-size: 9pt; color: #555; }
-.identifier { string-set: identifier content(); font-size: 9pt; color: #555; }
+.identifier { font-size: 9pt; color: #555; }
 dl { margin: .5rem 0 1.5rem; }
 dt { font-weight: 600; margin-top: .4rem; }
 dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -300,6 +300,7 @@ def render_message(
     for attachment in attachments:
         path = str(attachment.get("path", ""))
         filename = attachment.get("original_filename" if basic else "filename", Path(path).name)
+        label = attachment.get("original_filename") or filename or Path(path).name
         original_filename = (
             ""
             if basic
@@ -313,11 +314,17 @@ def render_message(
             if not basic
             else ""
         )
+        saved_details = (
+            "<details><summary>Saved attachment details</summary>"
+            f"<p>Archive path: <code>{escape(path)}</code></p>{hash_detail}</details>"
+            if not basic
+            else ""
+        )
         attachment_items.append(
-            f'<li><a href="{escape(path)}">{escape(filename)}</a><br>'
+            f'<li><a href="{escape(path)}">{escape(label)}</a><br>'
             f"{original_filename}"
             f"{escape(annotation)}; {escape(attachment.get('content_type', ''))}"
-            f"{hash_detail}</li>"
+            f"{saved_details}</li>"
         )
         if str(attachment.get("content_type", "")).startswith("image/") and not attachment.get(
             "inline"
@@ -327,8 +334,8 @@ def render_message(
                     raise ValueError("attachment decoding incomplete")
                 _raster(_local_asset(path, directory, asset_root or directory))
                 previews.append(
-                    f'<figure><img src="{escape(path)}" alt="{escape(filename)}">'
-                    f'<figcaption>Image attachment: <a href="{escape(path)}">{escape(filename)}</a>'
+                    f'<figure><img src="{escape(path)}" alt="{escape(label)}">'
+                    f'<figcaption>Image attachment: <a href="{escape(path)}">{escape(label)}</a>'
                     "</figcaption></figure>"
                 )
             except (OSError, ValueError, KeyError, Image.DecompressionBombError) as error:
@@ -358,11 +365,16 @@ def render_message(
         )
     csp = "default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
     identifier_html = f'<p class="identifier">{escape(identifier)}</p>' if not basic else ""
+    css = (
+        CSS.replace("content: 'Page '", "content: 'Message page '")
+        if metadata.get("combined_pdf")
+        else CSS
+    )
     result = (
         f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<meta http-equiv="Content-Security-Policy" content="{escape(csp)}">'
-        f"<title>{escape(subject)}</title><style>{CSS}</style></head>"
+        f"<title>{escape(subject)}</title><style>{css}</style></head>"
         f'<body data-archive-label="{escape(archive_label)}"><nav>{nav}</nav>'
         f'<p class="context">{escape(context[:180])}</p>{identifier_html}'
         f"<h1>{escape(subject)}</h1><dl>{details}</dl>{limitations}{''.join(sections)}"

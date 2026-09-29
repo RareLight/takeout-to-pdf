@@ -68,6 +68,8 @@ jobs:
           mkdir -p test-results
           uv run --locked python -m weasyprint --info > test-results/renderer.txt
           dpkg-query -W > test-results/native-packages.txt
+      - name: Install browser for index benchmark
+        run: uv run --locked playwright install --with-deps chromium
       - name: Exercise properties, recovery, and archive scale
         run: uv run --locked pytest tests/property tests/integration tests/performance --durations=0 --junitxml=test-results/extended.xml --basetemp=test-results/extended-artifacts
       - name: Preserve benchmarks and failing examples

@@ -126,7 +126,7 @@ JS = """'use strict';
     tbody.innerHTML = initialRows;
     staticPagers.forEach(pager => { pager.hidden = false; });
     searchPager.hidden = true;
-    count.textContent = `${total} selected messages`;
+    count.textContent = `${total} selected messages; showing ${tbody.rows.length}`;
     empty.textContent = total ? 'No messages match these filters. Try clearing a filter.' :
       'No messages were included in this archive.';
     empty.hidden = total !== 0;
@@ -140,7 +140,7 @@ JS = """'use strict';
     previous.disabled = resultPage === 0;
     next.disabled = resultPage + 1 >= pages;
     pageLabel.textContent = pages ? `Page ${resultPage + 1} of ${pages}` : '';
-    count.textContent = `${matches.length} of ${total} selected messages shown`;
+    count.textContent = `${matches.length} of ${total} selected messages match; showing ${Math.min(pageSize, matches.length - start)}`;
     empty.textContent = 'No messages match these filters. Try clearing a filter.';
     empty.hidden = matches.length !== 0;
   }
@@ -271,6 +271,17 @@ JS = """'use strict';
     if (!event.persisted) setTimeout(() => {
       if (hasFilters(criteria())) requestSearch(true);
     }, 0);
+  });
+  document.querySelectorAll('.browse-list').forEach(list => {
+    list.addEventListener('keydown', event => {
+      if (event.target !== list || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const line = Number.parseFloat(getComputedStyle(list).lineHeight);
+      const steps = {ArrowDown: line, ArrowUp: -line, PageDown: list.clientHeight,
+        PageUp: -list.clientHeight, Home: -list.scrollHeight, End: list.scrollHeight};
+      if (!Object.prototype.hasOwnProperty.call(steps, event.key)) return;
+      event.preventDefault();
+      list.scrollBy({top: steps[event.key], behavior: 'instant'});
+    });
   });
   document.querySelectorAll('.browse-group[data-shards]').forEach(setupBrowse);
   form.hidden = false;
@@ -422,7 +433,9 @@ def _row(
     for attachment in entry.get("attachments", []):
         path = attachment.get("archive_path", attachment.get("path", ""))
         if path:
-            label = attachment.get("original_filename" if basic else "filename", Path(path).name)
+            label = (
+                attachment.get("original_filename") or attachment.get("filename") or Path(path).name
+            )
             attachments.append(
                 f'<li><a href="{escape(_href(path, page, root))}">{escape(label)}</a></li>'
             )
@@ -440,22 +453,44 @@ def _row(
             details.append(
                 f'<p><a href="{escape(_href(entry["eml_path"], page, root))}">Original EML</a></p>'
             )
+        for attachment in entry.get("attachments", []):
+            path = attachment.get("archive_path", attachment.get("path", ""))
+            if path:
+                details.append(f"<p>Attachment path: <code>{escape(path)}</code></p>")
         technical = (
             '<details class="technical-details"><summary>Record details</summary>'
             + "".join(details)
             + "</details>"
         )
-    people = ", ".join(entry.get("senders", [])) or "Unknown sender"
-    recipients = ", ".join(entry.get("recipients", [])) or "Unknown recipients"
+    people = entry.get("from") or ", ".join(entry.get("senders", [])) or "Unknown sender"
+    recipients = (
+        ", ".join(str(entry.get(key) or "") for key in ("to", "cc", "bcc") if entry.get(key))
+        or ", ".join(entry.get("recipients", []))
+        or "Unknown recipients"
+    )
     labels = entry.get("labels", [])
     label_text = f"<small>Labels: {escape(', '.join(labels))}</small>" if labels else ""
+    status = ""
+    if entry.get("render_status") == "failed" or not entry.get("pdf_path"):
+        status = (
+            '<p class="notice">PDF unavailable. '
+            + ("Read the email above or inspect " if entry.get("html_path") else "Inspect ")
+            + f'<a href="{escape(_href("issues.jsonl", page, root))}">issues.jsonl</a>'
+            + "; retry the export to a new directory if needed.</p>"
+        )
+    elif entry.get("render_status") == "limited" or entry.get("issues"):
+        status = (
+            '<p class="notice">Exported with warnings. Review '
+            + f'<a href="{escape(_href("issues.jsonl", page, root))}">issues.jsonl</a>'
+            + " before relying on this message.</p>"
+        )
     return (
         f'<tr data-message-id="{escape(entry["id"])}">'
         f'<td data-label="Date">{escape(entry.get("date_display") or "Undated")}</td>'
         f'<th scope="row" class="subject-cell">{subject}'
         f"{label_text}{technical}</th>"
         f'<td data-label="People">From: {escape(people)}<br>To/Cc/Bcc: {escape(recipients)}</td>'
-        f'<td data-label="Files">{"".join(links)}{attachment_list}</td></tr>'
+        f'<td data-label="Files">{"".join(links)}{status}{attachment_list}</td></tr>'
     )
 
 
@@ -500,7 +535,7 @@ def _page(
 def _selection(name: str, label: str, values: list[str]) -> str:
     if len(values) > FILTER_SELECT_LIMIT:
         return (
-            f'<label>{label}<input id="{name}" type="search" '
+            f'<label>{label} (contains)<input id="{name}" type="search" '
             f'placeholder="Type part of {escape(label.lower())}"></label>'
         )
     options = "".join(
@@ -660,14 +695,13 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
             for value, count, path in items[:FACET_PREVIEW]
         )
         attributes = ""
-        list_attributes = ""
+        list_attributes = f' class="browse-list" tabindex="0" aria-label="{title} categories"'
         status = ""
         fallback = ""
         if len(items) > FACET_PREVIEW:
             catalog = _write_catalog(root, facet, items)
             shards = _write_facet_shards(root, facet, items)
             attributes = f' data-facet="{facet}" data-total="{len(items)}" data-shards="{shards}"'
-            list_attributes = f' class="browse-list" tabindex="0" aria-label="{title} categories"'
             status = (
                 '<p class="browse-status muted" role="status" aria-live="polite">'
                 f"Showing {FACET_PREVIEW} of {len(items)} categories. "
@@ -715,7 +749,10 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
                     "recipients": entry.get("recipients", []),
                     "labels": entry.get("labels", []),
                     "direction": entry.get("direction") or "unknown",
-                    "attached": bool(entry.get("attachments")),
+                    "attached": any(
+                        not item.get("inline") and not item.get("control")
+                        for item in entry.get("attachments", [])
+                    ),
                     "row": _row(entry, root / "index.html", root, linked_conversations, basic),
                     "text": "\n".join(
                         [
@@ -725,6 +762,7 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
                             " ".join(entry.get("senders", [])),
                             " ".join(entry.get("recipients", [])),
                             " ".join(entry.get("labels", [])),
+                            *[str(entry.get(key) or "") for key in ("from", "to", "cc", "bcc")],
                         ]
                     ),
                 }
@@ -754,26 +792,41 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         )
         + '<label>From date (UTC)<input id="start" type="date"></label>'
         '<label>Through date (UTC)<input id="end" type="date"></label>'
-        '<label class="check-label">Has attachments<input id="attached" type="checkbox"></label>'
+        '<label class="check-label">Has file attachments<input id="attached" type="checkbox"></label>'
         "</div></details>"
         '<button type="reset">Clear filters</button></form>'
     )
     counts = summary.get("counts", {})
     selected = counts.get("selected", len(entries))
-    available = sum(bool(entry.get("pdf_path")) for entry in entries)
+    available = len({entry["pdf_path"] for entry in entries if entry.get("pdf_path")})
     limited = counts.get("limited", 0)
     failed = counts.get("failed", 0)
-    conversation_count = len(conversation_sizes)
+    unresolved = counts.get("unresolved", 0)
+    conversation_count = sum(size > 1 for size in conversation_sizes.values())
+    display_zone = summary.get("filters", {}).get("timezone", "UTC")
     source = summary.get("source", {}).get("filename", "")
     source_text = f" from {escape(source)}" if source else ""
     warning_parts = []
     if limited:
         warning_parts.append(
-            f"{limited} {'message may' if limited == 1 else 'messages may'} be incomplete"
+            f"{limited} {'message' if limited == 1 else 'messages'} exported with warnings"
         )
     if failed:
-        warning_parts.append(f"{failed} {'PDF is' if failed == 1 else 'PDFs are'} unavailable")
-    warning = f'<p class="notice">{escape("; ".join(warning_parts))}.</p>' if warning_parts else ""
+        warning_parts.append(
+            f"{failed} selected {'message' if failed == 1 else 'messages'} without a PDF"
+        )
+    if unresolved:
+        warning_parts.append(
+            f"{unresolved} source {'message' if unresolved == 1 else 'messages'} "
+            "with unresolved selection (not included)"
+        )
+    warning = (
+        f'<p class="notice">{escape("; ".join(warning_parts))}. '
+        '<a href="issues.jsonl">Review the issue log</a> before relying on this export. '
+        "Resolve the reported issues and retry to a new directory if needed.</p>"
+        if warning_parts
+        else ""
+    )
     technical_scope = ""
     if not basic:
         details = "".join(
@@ -786,10 +839,12 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         )
     scope = (
         '<section class="summary"><h2>Archive at a glance</h2>'
-        f"<p>Messages selected{source_text}. Dates and folders use UTC.</p>"
+        f"<p>Messages selected{source_text}. Displayed dates use {escape(display_zone)}; "
+        "chronology, folders, and date filters in this index use UTC.</p>"
         '<div class="summary-stats">'
         f"<span><strong>{selected}</strong><br>{'message' if selected == 1 else 'messages'}</span>"
-        f"<span><strong>{available}</strong><br>{'PDF' if available == 1 else 'PDFs'} available</span>"
+        f"<span><strong>{available}</strong><br>"
+        f"{'PDF file' if available == 1 else 'PDF files'} available</span>"
         f"<span><strong>{conversation_count}</strong><br>"
         f"{'conversation' if conversation_count == 1 else 'conversations'}</span></div>"
         f"{warning}{technical_scope}</section>"
@@ -805,7 +860,8 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         '<p class="muted">Search message text, subjects, people, labels, and attachment names. '
         "Attachment contents are not searched.</p>"
         + controls
-        + f'<p id="result-count" role="status" aria-live="polite">{len(entries)} selected messages</p>'
+        + f'<p id="result-count" role="status" aria-live="polite">'
+        f"{len(entries)} selected messages; showing {min(PAGE_SIZE, len(entries))}</p>"
         '<p id="no-results" class="notice" hidden>No messages match these filters. Try clearing a filter.</p>'
         "<noscript><p>JavaScript is disabled. All chronological messages and static browsing links remain available.</p></noscript>"
         '<h2 id="messages-table">Messages in date order</h2>'

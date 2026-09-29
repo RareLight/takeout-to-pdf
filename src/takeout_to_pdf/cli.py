@@ -254,11 +254,19 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"Indexed {counts['indexed']}; selected {counts['selected']}; excluded {counts['excluded']}; unresolved {counts['unresolved']}."
     )
-    print(
-        "Complete and verified."
-        if result.status == 0
-        else "Incomplete: inspect issues.jsonl and the index before relying on this export."
-    )
+    if result.status == 0:
+        print("Complete and verified.")
+    elif counts.get("failed", 0) or counts.get("unresolved", 0):
+        print(
+            "Incomplete: selected PDFs are unavailable or source-message selection is "
+            "unresolved. Inspect issues.jsonl and the index; retry to a new directory "
+            "after resolving the issues."
+        )
+    else:
+        print(
+            "Exported with warnings: inspect issues.jsonl and the index before relying "
+            "on this export."
+        )
     hours, remaining = divmod(round(monotonic() - started), 3600)
     minutes, seconds = divmod(remaining, 60)
     print(f"Total processing time: {hours:02}:{minutes:02}:{seconds:02}")

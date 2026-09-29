@@ -280,6 +280,45 @@ def test_preflight_precedes_source_reads_and_output_creation(tmp_path, monkeypat
     assert source.read_bytes() == original
 
 
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf"), 0, -1])
+def test_render_timeout_rejects_non_finite_and_nonpositive_values(tmp_path, monkeypatch, timeout):
+    from takeout_to_pdf import archive
+
+    source = mailbox_file(tmp_path / "input.mbox")
+    original = source.read_bytes()
+    output = tmp_path / "new" / "archive"
+
+    def fail(*args, **kwargs):
+        raise AssertionError("renderer check must not run")
+
+    monkeypatch.setattr(archive, "_check_renderer", fail)
+    with pytest.raises(ValueError, match="positive and finite"):
+        export_archive(source, output, render_timeout=timeout)
+    assert not output.parent.exists()
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf"), 0, -1])
+def test_cli_rejects_non_finite_and_nonpositive_render_timeout(
+    tmp_path, monkeypatch, capsys, timeout
+):
+    from takeout_to_pdf import archive, cli
+
+    source = mailbox_file(tmp_path / "input.mbox")
+    output = tmp_path / "new" / "archive"
+
+    def fail(*args, **kwargs):
+        raise AssertionError("renderer check must not run")
+
+    monkeypatch.setattr(archive, "_check_renderer", fail)
+    status = cli.main([str(source), "--render-timeout=" + str(timeout), "-o", str(output)])
+    assert status == 2
+    err = capsys.readouterr().err
+    assert "positive and finite" in err
+    assert "Traceback" not in err
+    assert not output.parent.exists()
+
+
 def test_export_prepares_filter_configuration_once(tmp_path, monkeypatch):
     import takeout_to_pdf.filters
     from takeout_to_pdf import archive

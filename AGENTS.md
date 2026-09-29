@@ -6,10 +6,9 @@
 2. Never hardcode. Generalize all solutions, even for "quick tests".
 3. Never manually copy. Everything must be programmatically coherent.
 4. Never modify tests to pass. Fix root causes only.
-5. Never run migrations manually. Use docker compose up -d exclusively.
-6. Own your changes. Fix flaky tests and regressions you cause.
-7. No bypassing. Never twist configs or tests to fake success.
-8. Simplest approach. Never overcomplicate or add unnecessary comments.
+5. Own your changes. Fix flaky tests and regressions you cause.
+6. No bypassing. Never twist configs or tests to fake success.
+7. Simplest approach. Never overcomplicate or add unnecessary comments.
 
 ## Tool Hierarchy
 
@@ -25,6 +24,10 @@
 - Plain style. No bold, emojis, decorative comments, or editorializing.
 - Conventional Commits: feat, fix, docs, refactor, test, chore.
 - No Co-Authored-By lines or watermarks.
+
+## Project scope
+
+Use README.md for the output/CLI contract and docs/TESTING.md for verification. Preserve main.py and -i/--input compatibility. Keep comments that explain preservation choices, compatibility handling, or non-obvious constraints; avoid comments that restate code.
 
 ## Testing Strategy
 
@@ -59,16 +62,6 @@ Run in order, committing at each green step:
 Write one-off programs in `./playground` to isolate and test intent/hypothesis.
 
 ## Language Pitfalls
-
-Go:
-- Prefix commands with CGO_ENABLED=1 (required for SQLite and race detection).
-- Never edit gen/ directories. Run go generate.
-
-C#:
-- Never edit obj/ or bin/.
-- Enable nullable reference types.
-- Never block on async (no .Result or .Wait()).
-- Prefer LINQ except in hot paths.
 
 Windows:
 - Use pwsh.exe (v7+), never powershell.exe (v5.1).

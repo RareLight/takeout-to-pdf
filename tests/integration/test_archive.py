@@ -52,7 +52,13 @@ def test_exported_pdf_footer_uses_account_email(tmp_path, options):
     entry = records(result.path)[0]
     pdf = result.path / entry["pdf_path"]
     page = PdfReader(pdf).pages[entry["pdf_page"] - 1]
-    assert "Google Takeout - Gmail Archive: owner@example.net" in page.extract_text()
+    text = page.extract_text()
+    assert "Google Takeout - Gmail Archive: owner@example.net" in text
+    if options == {"format": "single-pdf"}:
+        assert "Message page 1 of 1" in text
+    else:
+        assert "Page 1 of" in text
+        assert "Message page" not in text
 
 
 def test_basic_export_has_readable_pdfs_attachments_and_browse_views(tmp_path):
@@ -201,6 +207,31 @@ def test_unique_plain_alternative_remains_readable_and_searchable(tmp_path, mode
 
 
 @pytest.mark.parametrize("mode", ["basic", "default", "compliance"])
+def test_case_distinct_alternatives_stay_readable_and_searchable(tmp_path, mode):
+    message = make_message("Case distinct")
+    message.set_content("aBc123")
+    message.add_alternative("<p>AbC123</p>", subtype="html")
+    source = make_box(tmp_path, [message])
+
+    result = export_archive(
+        source, tmp_path / mode, basic=mode == "basic", compliance=mode == "compliance"
+    )
+    entry = records(result.path)[0]
+    pdf_text = " ".join(
+        page.extract_text() for page in PdfReader(result.path / entry["pdf_path"]).pages
+    )
+    search_data = "".join(path.read_text() for path in (result.path / "assets").glob("search-*.js"))
+    assert "aBc123" in pdf_text
+    assert "AbC123" in pdf_text
+    assert "aBc123" in search_data
+    assert "AbC123" in search_data
+    if mode != "basic":
+        html = (result.path / entry["html_path"]).read_text()
+        assert "aBc123" in html
+        assert "AbC123" in html
+
+
+@pytest.mark.parametrize("mode", ["basic", "default", "compliance"])
 def test_image_only_alternative_uses_plain_fallback_and_reports_by_mode(tmp_path, mode):
     message = make_message("Image fallback")
     message.set_content("Readable fallback")
@@ -241,6 +272,10 @@ def test_basic_failed_pdf_keeps_no_message_html(tmp_path, monkeypatch):
     assert entry["pdf_path"] is None
     assert "html_path" not in entry
     assert not list((result.path / "messages").rglob("*.html"))
+    index = (result.path / "index.html").read_text()
+    assert "PDF unavailable." in index
+    assert 'href="issues.jsonl"' in index
+    assert ">PDF</a>" not in index
     assert verify_archive(result.path)["ok"]
 
 
@@ -340,6 +375,41 @@ def test_chronology_and_combined_mode_parity(tmp_path):
     assert verify_archive(combined.path)["ok"]
 
 
+def test_combined_failed_chunk_has_no_pdf_link_but_success_does(tmp_path, monkeypatch):
+    from urllib.parse import unquote, urlsplit
+
+    from bs4 import BeautifulSoup
+
+    from takeout_to_pdf import archive
+
+    source = make_box(tmp_path, [make_message("First"), make_message("Second")])
+    real_render = archive._render_pdf
+
+    def fail_first_chunk(html, pdf, root, timeout, pool=None):
+        if "First" in str(html):
+            raise RuntimeError("first chunk failed")
+        return real_render(html, pdf, root, timeout, pool)
+
+    monkeypatch.setattr(archive, "_render_pdf", fail_first_chunk)
+    result = export_archive(source, tmp_path / "combined", format="single-pdf")
+    assert result.status == 1
+    entries = {entry["subject"]: entry for entry in records(result.path)}
+    failed = entries["First"]
+    succeeded = entries["Second"]
+    assert failed["render_status"] == "failed"
+    assert failed["pdf_path"] is None
+    failed_html = (result.path / failed["html_path"]).read_text()
+    assert ">PDF</a>" not in failed_html
+    soup = BeautifulSoup((result.path / succeeded["html_path"]).read_text(), "html.parser")
+    pdf_link = soup.find("a", string="PDF")
+    assert pdf_link is not None
+    href = urlsplit(pdf_link["href"])
+    assert href.fragment == f"page={succeeded['pdf_page']}"
+    resolved = ((result.path / succeeded["html_path"]).parent / unquote(href.path)).resolve()
+    assert resolved == (result.path / succeeded["pdf_path"]).resolve()
+    assert verify_archive(result.path)["ok"]
+
+
 def test_filtered_compliance_never_copies_excluded_body(tmp_path):
     selected, excluded = make_message("SELECTED"), make_message("EXCLUDED_PRIVATE")
     excluded.replace_header("From", "other@example.com")
@@ -403,9 +473,19 @@ def test_bad_date_preserved_without_abort(tmp_path):
 
 
 def test_empty_and_zero_match_are_valid_archives(tmp_path):
+    import importlib.metadata
+
+    from takeout_to_pdf import __version__
+
     source = make_box(tmp_path, [])
     result = export_archive(source, tmp_path / "empty")
     assert result.status == 0 and records(result.path) == []
+    assert result.manifest["app_version"] == "1.0.0"
+    assert (
+        __version__
+        == importlib.metadata.version("takeout-to-pdf")
+        == result.manifest["app_version"]
+    )
     assert "0" in (result.path / "index.html").read_text()
     assert verify_archive(result.path)["ok"]
 
@@ -423,6 +503,11 @@ def test_render_failure_keeps_source_and_reports_incomplete(tmp_path, monkeypatc
     assert entry["render_status"] == "failed"
     assert (result.path / entry["eml_path"]).exists()
     assert "simulated renderer failure" in (result.path / "issues.jsonl").read_text()
+    index = (result.path / "index.html").read_text()
+    assert "PDF unavailable." in index
+    assert 'href="issues.jsonl"' in index
+    html = (result.path / entry["html_path"]).read_text()
+    assert ">PDF</a>" not in html
 
 
 def test_input_bytes_unchanged_even_when_render_fails(tmp_path, monkeypatch):
@@ -462,6 +547,47 @@ def test_pdf_attachment_links_survive_archive_relocation(tmp_path, mode):
     assert wanted.resolve() in resolved
     assert wanted.read_bytes() == b"portable evidence"
     assert verify_archive(new_root)["ok"]
+
+
+@pytest.mark.parametrize("compliance", [False, True])
+def test_message_html_links_pdf_and_uses_readable_attachment_names(tmp_path, compliance):
+    from urllib.parse import unquote, urlsplit
+
+    from bs4 import BeautifulSoup
+
+    from takeout_to_pdf.render import escape
+
+    message = make_message()
+    message.add_attachment(
+        b"human-readable attachment bytes",
+        maintype="text",
+        subtype="plain",
+        filename="Human notes.txt",
+    )
+    source = make_box(tmp_path, [message])
+    result = export_archive(source, tmp_path / "archive", compliance=compliance)
+    entry = records(result.path)[0]
+    html_path = result.path / entry["html_path"]
+    document = html_path.read_text()
+    soup = BeautifulSoup(document, "html.parser")
+    pdf_link = soup.find("a", string="PDF")
+    assert pdf_link is not None
+    resolved_pdf = (html_path.parent / unquote(urlsplit(pdf_link["href"]).path)).resolve()
+    assert resolved_pdf == (result.path / entry["pdf_path"]).resolve()
+    attachment = entry["attachments"][0]
+    saved = result.path / attachment["path"]
+    link = soup.find("a", string="Human notes.txt")
+    assert link is not None
+    resolved_attachment = (html_path.parent / unquote(urlsplit(link["href"]).path)).resolve()
+    assert resolved_attachment == saved.resolve()
+    assert saved.read_bytes() == b"human-readable attachment bytes"
+    assert "Saved attachment details" in document
+    assert f"Archive path: <code>{escape(link['href'])}</code>" in document
+    index = (result.path / "index.html").read_text()
+    index_soup = BeautifulSoup(index, "html.parser")
+    assert index_soup.find("a", string="Human notes.txt") is not None
+    assert "Attachment path:" in index
+    assert verify_archive(result.path)["ok"]
 
 
 @pytest.mark.parametrize("mode", ["directory", "single-pdf"])

@@ -17,6 +17,25 @@ class Links(HTMLParser):
             self.hrefs.extend(value for key, value in attrs if key == "href")
 
 
+def _entry(identifier, **overrides):
+    entry = {
+        "id": identifier,
+        "subject": f"Subject {identifier}",
+        "date_utc": "2020-01-01T00:00:00+00:00",
+        "date_display": "2020-01-01 UTC",
+        "senders": ["alice@example.com"],
+        "recipients": ["reader@example.com"],
+        "labels": [],
+        "body_text": "body",
+        "attachments": [],
+        "message_id": f"<{identifier}@example.com>",
+        "references": [],
+        "issues": [],
+    }
+    entry.update(overrides)
+    return entry
+
+
 def test_static_index_views_preserve_occurrences_and_scope(tmp_path):
     entries = []
     for ordinal, sender in enumerate(["alice@example.com", "bob@example.com"], 1):
@@ -39,6 +58,7 @@ def test_static_index_views_preserve_occurrences_and_scope(tmp_path):
             }
         )
     write_index(tmp_path, entries, {"status": "complete", "selected": 2})
+    (tmp_path / "issues.jsonl").write_text("")
     index = (tmp_path / "index.html").read_text()
     assert "<script>alert(1)</script>" not in index
     assert "2020-01" in index and "alice@example.com" in index
@@ -273,6 +293,7 @@ def test_large_index_searches_later_pages_without_loading_search_on_open(tmp_pat
     )
     page.goto((tmp_path / "index.html").as_uri())
     assert page.locator("tr[data-message-id]").count() == 200
+    expect(page.locator("#result-count")).to_have_text("201 selected messages; showing 200")
     assert not loaded_search
     (tmp_path / "other.html").write_text("<h1>Other page</h1>")
     page.goto((tmp_path / "other.html").as_uri())
@@ -289,13 +310,20 @@ def test_large_index_searches_later_pages_without_loading_search_on_open(tmp_pat
     expect(page.locator("#result-count")).to_contain_text("1 of 201")
     expect(page.locator("tr[data-message-id]")).to_have_attribute("data-message-id", "m0200")
     page.locator("#query").fill("Synthetic message")
-    expect(page.locator("#result-count")).to_contain_text("201 of 201")
+    expect(page.locator("#result-count")).to_contain_text(
+        "201 of 201 selected messages match; showing 200"
+    )
     assert page.locator("tr[data-message-id]").count() == 200
     page.get_by_role("button", name="Next results").click()
+    expect(page.locator("#result-count")).to_contain_text(
+        "201 of 201 selected messages match; showing 1"
+    )
     assert page.locator("tr[data-message-id]").count() == 1
     page.get_by_role("button", name="Clear filters").click()
     expect(page.locator("tr[data-message-id]")).to_have_count(200)
+    expect(page.locator("#result-count")).to_contain_text("201 selected messages; showing 200")
     page.get_by_text("More filters", exact=True).click()
+    expect(page.get_by_text("Sender (contains)", exact=True)).to_be_visible()
     page.locator("#sender").fill("sender200@")
     expect(page.locator("#result-count")).to_contain_text("1 of 201")
     expect(page.locator("tr[data-message-id]")).to_have_attribute("data-message-id", "m0200")
@@ -487,3 +515,245 @@ def test_email_html_is_inert_offline_and_remains_readable(tmp_path, page):
     )
     assert page.locator("script,iframe,svg,form,input").count() == 0
     assert not network and not dialogs
+
+
+@pytest.mark.parametrize("basic", [False, True])
+def test_index_rows_report_pdf_status_and_summary_warnings(tmp_path, basic):
+    entries = [
+        _entry(
+            "m1",
+            pdf_path="m1.pdf",
+            html_path="" if basic else "m1.html",
+            render_status="rendered",
+            attachments=[
+                {
+                    "filename": "m1__a001__Human-notes.txt",
+                    "original_filename": "Human notes.txt",
+                    "path": "files/m1-attachment.txt",
+                }
+            ],
+        ),
+        _entry(
+            "m2",
+            pdf_path="m2.pdf",
+            html_path="" if basic else "m2.html",
+            render_status="limited",
+            issues=["Attachment preview unavailable"],
+        ),
+        _entry(
+            "m3",
+            pdf_path="",
+            html_path="" if basic else "m3.html",
+            render_status="failed",
+            issues=["PDF rendering failed: synthetic"],
+        ),
+    ]
+    summary = {
+        "status": "incomplete",
+        "counts": {"selected": 3, "limited": 1, "failed": 1, "unresolved": 2},
+        "filters": {"timezone": "UTC"},
+    }
+    write_index(tmp_path, entries, summary, basic=basic)
+    index = (tmp_path / "index.html").read_text()
+    assert "1 message exported with warnings" in index
+    assert "1 selected message without a PDF" in index
+    assert "2 source messages with unresolved selection (not included)" in index
+    assert 'href="issues.jsonl"' in index and "Review the issue log" in index
+    assert "PDF files available" in index
+    soup = BeautifulSoup(index, "html.parser")
+    rows = {row["data-message-id"]: row for row in soup.select("tr[data-message-id]")}
+    rendered_text = rows["m1"].get_text(" ")
+    assert "PDF unavailable" not in rendered_text
+    assert "Exported with warnings" not in rendered_text
+    assert rows["m1"].find("a", string="Human notes.txt") is not None
+    limited_text = rows["m2"].get_text(" ")
+    assert "Exported with warnings" in limited_text
+    assert "PDF unavailable" not in limited_text
+    failed = rows["m3"]
+    failed_text = failed.get_text(" ")
+    assert "PDF unavailable." in failed_text
+    assert failed.find("a", href="issues.jsonl") is not None
+    assert failed.find("a", string="PDF") is None
+    if basic:
+        assert "Inspect" in failed_text
+        assert "Attachment path" not in index
+        assert "technical-details" not in index
+    else:
+        assert "Read the email above" in failed_text
+        row = rows["m1"]
+        detail = row.select_one("details.technical-details")
+        assert detail is not None
+        assert "files/m1-attachment.txt" in detail.get_text(" ")
+        for element in row.select("details"):
+            element.decompose()
+        assert "files/m1-attachment.txt" not in row.get_text(" ")
+
+
+def test_summary_counts_distinct_pdfs_and_multi_member_conversations(tmp_path):
+    entries = [
+        _entry("m1", pdf_path="combined.pdf", html_path="a.html"),
+        _entry("m2", pdf_path="combined.pdf", html_path="b.html"),
+    ]
+    write_index(tmp_path, entries, {"status": "complete"})
+    soup = BeautifulSoup((tmp_path / "index.html").read_text(), "html.parser")
+    spans = [span.get_text(" ", strip=True) for span in soup.select(".summary-stats span")]
+    assert spans == ["2 messages", "1 PDF file available", "0 conversations"]
+
+    entries[1]["references"] = ["<m1@example.com>"]
+    other = tmp_path / "linked"
+    write_index(other, entries, {"status": "complete"})
+    soup = BeautifulSoup((other / "index.html").read_text(), "html.parser")
+    spans = [span.get_text(" ", strip=True) for span in soup.select(".summary-stats span")]
+    assert spans == ["2 messages", "1 PDF file available", "1 conversation"]
+
+
+def test_summary_displays_filter_timezone_with_utc_chronology(tmp_path):
+    write_index(
+        tmp_path,
+        [_entry("m1", pdf_path="m1.pdf", html_path="m1.html")],
+        {"status": "complete", "filters": {"timezone": "America/Chicago"}},
+    )
+    index = (tmp_path / "index.html").read_text()
+    assert (
+        "Displayed dates use America/Chicago; chronology, folders, and date filters "
+        "in this index use UTC." in index
+    )
+
+
+def test_empty_archive_index_shows_zero_counts(tmp_path):
+    write_index(tmp_path, [], {"status": "complete"})
+    index = (tmp_path / "index.html").read_text()
+    assert "0 selected messages; showing 0" in index
+    soup = BeautifulSoup(index, "html.parser")
+    spans = [span.get_text(" ", strip=True) for span in soup.select(".summary-stats span")]
+    assert spans == ["0 messages", "0 PDF files available", "0 conversations"]
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("field", ["from", "to", "cc", "bcc"])
+def test_display_header_addresses_are_searchable_and_escaped(tmp_path, page, field):
+    entry = _entry(
+        "m1",
+        html_path="message.html",
+        **{field: 'Grace Hopper <img src="https://tracker.example/pixel">'},
+    )
+    write_index(tmp_path, [entry], {"status": "complete"})
+    dialogs = []
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+    page.goto((tmp_path / "index.html").as_uri())
+    page.locator("#query").fill("Grace Hopper")
+    expect(page.locator("#result-count")).to_contain_text("1 of 1")
+    row = page.locator('tr[data-message-id="m1"]')
+    expect(row).to_be_visible()
+    assert "Grace Hopper" in row.locator('td[data-label="People"]').inner_text()
+    assert row.locator("img").count() == 0
+    assert page.locator("img").count() == 0
+    assert not dialogs
+
+
+@pytest.mark.browser
+def test_attached_filter_matches_file_attachments_only(tmp_path, page):
+    entries = [
+        _entry(
+            "m1",
+            html_path="a.html",
+            attachments=[{"filename": "file.bin", "path": "m1-file.bin"}],
+        ),
+        _entry(
+            "m2",
+            html_path="b.html",
+            attachments=[{"filename": "inline.png", "path": "m2-inline.png", "inline": True}],
+        ),
+        _entry(
+            "m3",
+            html_path="c.html",
+            attachments=[{"filename": "sig.p7s", "path": "m3-sig.p7s", "control": True}],
+        ),
+        _entry("m4", html_path="d.html"),
+    ]
+    write_index(tmp_path, entries, {"status": "complete"})
+    page.goto((tmp_path / "index.html").as_uri())
+    page.get_by_text("More filters", exact=True).click()
+    expect(page.get_by_text("Has file attachments", exact=True)).to_be_visible()
+    page.locator("#attached").check()
+    expect(page.locator("tr[data-message-id]:visible")).to_have_count(1)
+    expect(page.locator("tr[data-message-id]:visible")).to_have_attribute("data-message-id", "m1")
+    page.get_by_role("button", name="Clear filters").click()
+    expect(page.locator("tr[data-message-id]:visible")).to_have_count(4)
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("category_count", [24, 25])
+@pytest.mark.parametrize("basic", [False, True])
+def test_browse_list_is_focusable_contained_scroll_region(tmp_path, page, basic, category_count):
+    entries = [
+        _entry(
+            f"m{index:03}",
+            html_path=f"m{index}.html",
+            senders=[f"sender{index:02d}-very-long-distinct-name@example-domain.test"],
+        )
+        for index in range(category_count)
+    ]
+    write_index(tmp_path, entries, {"status": "complete"}, basic=basic)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto((tmp_path / "index.html").as_uri())
+    group = page.locator("details.browse-group", has_text="Senders")
+    group.locator("summary").click()
+    listing = group.locator(".browse-list")
+    assert listing.get_attribute("tabindex") == "0"
+    assert listing.get_attribute("aria-label") == "Senders categories"
+    expect(listing).to_have_css("overscroll-behavior-y", "contain")
+    metrics = listing.evaluate(
+        "element => ({scroll: element.scrollHeight, client: element.clientHeight})"
+    )
+    assert metrics["scroll"] > metrics["client"]
+    listing.focus()
+    expect(listing).to_be_focused()
+    handle = listing.element_handle()
+    listing.press("ArrowDown")
+    page.wait_for_function("el => el.scrollTop > 0", arg=handle)
+    listing.press("ArrowUp")
+    page.wait_for_function("el => el.scrollTop === 0", arg=handle)
+    listing.press("PageDown")
+    page.wait_for_function("el => el.scrollTop > 0", arg=handle)
+    listing.press("Home")
+    page.wait_for_function("el => el.scrollTop === 0", arg=handle)
+    listing.press("End")
+    page.wait_for_function(
+        "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 1", arg=handle
+    )
+    expect(listing.locator("li")).to_have_count(category_count)
+    listing.scroll_into_view_if_needed()
+    bounds = listing.bounding_box()
+    assert bounds is not None
+    page.mouse.move(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
+    before = page.evaluate("window.scrollY")
+    page.mouse.wheel(0, 500)
+    page.wait_for_timeout(100)
+    assert page.evaluate("window.scrollY") == before
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("category_count", [24, 25])
+def test_browse_category_link_enter_navigates_to_listing(tmp_path, page, category_count):
+    entries = [
+        _entry(
+            f"m{index:03}",
+            html_path=f"m{index}.html",
+            senders=[f"sender{index:02d}-very-long-distinct-name@example-domain.test"],
+        )
+        for index in range(category_count)
+    ]
+    write_index(tmp_path, entries, {"status": "complete"})
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto((tmp_path / "index.html").as_uri())
+    group = page.locator("details.browse-group", has_text="Senders")
+    group.locator("summary").click()
+    first_link = group.locator(".browse-list li a").first
+    target = first_link.evaluate("anchor => anchor.href")
+    first_link.focus()
+    expect(first_link).to_be_focused()
+    first_link.press("Enter")
+    page.wait_for_load_state("load")
+    assert page.url == target
+    expect(page.locator("tr[data-message-id]")).to_have_count(1)

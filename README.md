@@ -8,18 +8,50 @@ Use `--basic` for a smaller, human navigable directory archive. Its `messages/` 
 
 ## Install
 
-Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required for the documented development workflow. WeasyPrint also needs native text libraries. On macOS, install Pango with Homebrew; if the library cannot be found, set `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` when running. On Linux and Windows, follow the [WeasyPrint installation instructions](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html) for the matching platform.
+Install Git, Python 3.10 or newer, and [uv](https://docs.astral.sh/uv/getting-started/installation/). Obtain the repository and enter its directory:
+
+```sh
+git clone https://github.com/RareLight/takeout-to-pdf.git
+cd takeout-to-pdf
+```
+
+WeasyPrint requires native text libraries in addition to Python packages. On macOS with Homebrew:
+
+```sh
+brew install pango
+export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"
+```
+
+On Ubuntu 24.04, install `libpango-1.0-0`, `libpangoft2-1.0-0`, `libharfbuzz0b`, and `libharfbuzz-subset0`. On Windows, install MSYS2 and its UCRT64 Pango package, then set `WEASYPRINT_DLL_DIRECTORIES` to that installation's `ucrt64/bin` directory in PowerShell 7. See [platform setup commands](docs/TESTING.md#native-rendering-dependencies) and the [WeasyPrint installation instructions](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html) for details and other Linux distributions.
 
 ```sh
 uv sync --locked
-uv run takeout-to-pdf --help
+uv run --locked takeout-to-pdf --help
 ```
 
-The locked test tools are available with `uv sync --locked --group dev`. Pass the MBOX as the first argument, followed by any options. The compatibility entrypoint `uv run python main.py input.mbox` is also supported; existing `-i/--input` commands still work. `uv.lock` and `pyproject.toml` are tracked so a clean checkout has reproducible Python dependencies. No network access is needed to open a completed archive.
+Both `uv sync` and `uv run` include the `dev` dependency group by default ([uv default groups](https://docs.astral.sh/uv/concepts/projects/dependencies/#default-groups)). For a runtime-only checkout environment, use `uv sync --locked --no-dev` and `uv run --locked --no-dev takeout-to-pdf ...`; a later plain `uv run` adds development tools again. Installing a built wheel does not install the development group.
+
+Pass the MBOX as the first argument, followed by options. The compatibility entrypoint `uv run python main.py input.mbox` and existing `-i/--input` commands remain supported. The tracked `uv.lock` and `pyproject.toml` make checkout Python dependencies reproducible. No network access is needed to open a completed archive.
 
 Every export first renders a tiny synthetic PDF to check the native renderer dependencies, before reading any mail, and fails early with setup instructions if they are missing. Run `uv run --locked python -m takeout_to_pdf.render_worker --check` to diagnose the same check directly; nothing is installed or configured automatically.
 
 ## Export
+
+For a first readable export, keep your mailbox and output outside the checkout. Replace the path and account address below with your own:
+
+```sh
+uv run --locked takeout-to-pdf ../mail/takeout.mbox --basic --account-email me@example.com
+```
+
+Open the printed `index.html` path. The account address labels the PDF footer and enables direction views; it does not filter messages.
+
+| Mode | Reading views | Per-message sources and details |
+| --- | --- | --- |
+| `--basic` | PDF, saved attachments, searchable HTML index | No per-message HTML/EML/text sidecars; concise status |
+| Default | PDF, HTML, saved attachments, searchable index | EML and searchable text; expandable technical details |
+| `--compliance` | Default views plus full headers and MIME detail | Exact selected source records and metadata; whole MBOX copy only when unfiltered |
+
+All modes retain selected attachments and integrity records. `--format single-pdf` combines message PDFs while keeping attachments separate; it supports default/compliance presentation, not basic mode. Combined message footers say “Message page…”; the contents page uses physical document page numbers.
 
 ```sh
 # Every input occurrence, one PDF per message (default)
@@ -63,9 +95,9 @@ mail-folder/takeout__2026-09-27T170000Z__abc12345/
       2007-06-15T143000Z__alice-to-reader__subject__m00000042-abc123def456__a001__invoice.pdf
 ```
 
-Folder names use UTC timestamps and preserve source occurrences even when messages have the same Message-ID, date, or subject. The index opens directly from disk. It has a compact archive overview, direct links from subjects to messages, expandable browse lists for month, sender, recipient, label, and direction when known, plus conversation pages. Category lists load more entries as you scroll inside them; their complete static catalog pages remain available when JavaScript is disabled or a category data file is missing. Full message listings and static category catalogs are split into linked pages of at most 200 entries, so opening the main index does not build a table for the entire archive. JavaScript adds archive-wide search, filters, result counts, and a no-results prompt; it reads search data only after a filter is used and shows at most 200 matching messages at once. If the browser restores filters when returning to the index, search results are restored after the page opens. All messages and browse links remain usable without JavaScript. PDFs and search text use the preferred readable MIME body in every mode, retaining separate mixed-message sections while omitting duplicate alternatives. PDF links stay clickable without printing their full targets. Search covers message text, subjects, addresses, labels, and attachment filenames. It does not OCR image attachments or extract text inside office documents. Default and compliance indexes keep export and record details in expandable sections; the basic index uses simpler descriptions.
+Folder names use UTC timestamps and preserve source occurrences even when messages have the same Message-ID, date, or subject. The index opens directly from disk. It has a compact archive overview, direct links from subjects to messages, expandable browse lists for month, sender, recipient, label, and direction when known, plus conversation pages. Category lists load more entries as you scroll inside them; their complete static catalog pages remain available when JavaScript is disabled or a category data file is missing. Full message listings and static category catalogs are split into linked pages of at most 200 entries, so opening the main index does not build a table for the entire archive. JavaScript adds archive-wide search, filters, result counts, and a no-results prompt; it reads search data only after a filter is used and shows at most 200 matching messages at once. If the browser restores filters when returning to the index, search results are restored after the page opens. All messages and browse links remain usable without JavaScript. PDFs and search text use the preferred readable MIME body in every mode, retaining separate mixed-message sections while omitting duplicate alternatives. PDF links stay clickable without printing their full targets. Search covers message text, subjects, From/To/Cc/Bcc display names and addresses, labels, and attachment filenames. The index's file-attachment filter excludes inline resources and control parts. Participant dropdowns match exact mailboxes; large-list text fields are labeled “contains” and match substrings. Result counts distinguish all matches from messages displayed on the current page. It does not OCR image attachments or extract text inside office documents. Default and compliance indexes keep export and record details in expandable sections; the basic index uses simpler descriptions.
 
-Distinct human-readable text in a secondary MIME version stays in the reading view and search index. Very long plaintext URLs are shown by host to keep PDFs compact; the full URL remains in the original MBOX and, outside basic mode, the exported EML.
+Distinct human-readable text in a secondary MIME version stays in the reading view and search index. Case-sensitive differences are retained. Very long plaintext URLs are shown by host to keep PDFs compact; the full URL remains in the original MBOX and, outside basic mode, the exported EML.
 
 ## Select messages
 
@@ -96,15 +128,12 @@ Exit status 0 means the selected output was fully accounted for by the implement
 ## Development
 
 ```sh
-uv sync --locked --group dev
-uv run pytest tests/unit tests/property
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy src
-uv run pytest tests/integration tests/e2e tests/visual
+uv sync --locked
+uv run --locked playwright install chromium firefox webkit
+python3 scripts/check.py
 ```
 
-Browser tests use Playwright Chromium (`uv run playwright install chromium`); PDF visual tests require the rendering dependencies above. CI runs the supported Python matrix and the test layers described in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). [QUALITY_CONTROL.md](QUALITY_CONTROL.md) contains the initial defect review. Tests use synthetic mail, not personal Takeout files.
+See [Testing and release verification](docs/TESTING.md) for focused checks, native dependencies, the supported platform/browser matrix, clean-install checks, benchmarks, and release evidence requirements. The existing check script is the canonical local gate sequence. Tests use synthetic mail, not personal Takeout files.
 
 Keep real mail and exports outside the checkout: `.gitignore` covers mailboxes, generated archive ledgers, environment files, and OS/build artifacts, and every new export embeds an ignore-all `.gitignore` so a custom `-o` location inside another Git repository stays protected too. `python3 scripts/check_data.py` rejects tracked files matching any ignore rule — including files added with `git add -f` — reporting only paths; it runs first in `python3 scripts/check.py` and in CI, and can be run before committing. This protection is based on filenames and ignore rules, not content scanning or history cleanup, and cannot prevent a deliberate bypass.
 

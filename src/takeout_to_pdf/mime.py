@@ -94,7 +94,7 @@ def _shorten_long_urls(content: str) -> str:
 
 
 def _comparison_key(content: str) -> str:
-    return " ".join(unicodedata.normalize("NFC", content).casefold().split())
+    return " ".join(unicodedata.normalize("NFC", content).split())
 
 
 def presentation_bodies(record: MessageRecord) -> list[BodyPart]:

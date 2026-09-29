@@ -106,6 +106,32 @@ Python and renderer versions, and native environment. Establish measured baselin
 before imposing performance budgets. A small synthetic smoke workload does not
 demonstrate support for a 10,000-message archive.
 
+## Preservation release criteria
+
+Retain the original source bytes and every selected occurrence; duplicate Message-ID values are not deduplication keys. Reconcile `indexed = selected + excluded + unresolved` and `selected = rendered + limited + failed`. Unresolved selection is not an excluded message or a successful rendering. Keep malformed-source, unknown-date/encoding, missing-resource, and render-failure evidence explicit; basic mode's documented external-image notice policy is the exception, not a general permission to hide limitations.
+
+Check byte-identical decoded attachments and source records, all mixed body sections, case-distinct MIME alternatives, empty-plain/HTML fallback, text attachments before bodies, CID resources, forwarded messages, malformed transfer encodings, and signed/encrypted containers without claiming cryptographic verification. Test exact mailbox filters, UTC chronology with stable source-order ties, display timezones, inclusive dates, and uncertain selection separately. Filtered archives must not disclose excluded bodies through EML, copied source, search data, or logs.
+
+Exercise existing-output refusal, source/output collisions, symlinks, source mutation, owned staging cleanup, renderer timeout/crash recovery, and interrupted publication with synthetic inputs. Read-only verification must detect altered, missing, and unexpected files. Directory and combined formats must agree on selected order and attachment hashes. Preserve the `main.py` and `-i/--input` compatibility paths.
+
+Review actual desktop/mobile HTML and rendered PDF pages, not only extracted text. Include empty results, warning-only and failed exports, unresolved selection, long names/tokens/headers, wide tables, images, continuation pages, combined contents versus message page numbers, keyboard category scrolling on both sides of 24 categories, search result pagination, and returning from PDFs. Check original attachment labels and relative links after moving an archive. Confirm HTML is inert/offline and static browsing works without JavaScript. Passing text extraction does not prove content fits on a page.
+
+## Installation and scale release checks
+
+Use a fresh virtual environment for a locked checkout install and another for a built-wheel smoke test, outside the checkout and without system site packages. Build into a fresh output directory rather than reusing old `dist/` files. Install the wheel with runtime dependencies from the current lock; run its installed CLI outside the repository so source imports cannot mask packaging omissions. Verify `--version`, `importlib.metadata.version("takeout-to-pdf")`, runtime `__version__`, and a generated manifest's `app_version` all agree with package/lock metadata. Export isolated synthetic mail and run the installed read-only verifier. Native libraries are still required for wheel installs.
+
+The existing scale inputs are configurable:
+
+```sh
+INDEX_BENCHMARK_MESSAGES=30000 uv run --locked pytest tests/performance/test_index_scale.py --browser chromium --browser firefox --browser webkit -s
+SOURCE_BENCHMARK_MESSAGES=30000 uv run --locked pytest tests/performance/test_archive_scale.py -k record_scan -s
+ARCHIVE_BENCHMARK_MESSAGES=100 uv run --locked pytest tests/performance/test_archive_scale.py -k full_render -s
+```
+
+The defaults are 3,000 index records, 10,000 source records, and 100 fully rendered messages. Record the actual values used. A 30,000-record index test is not a 30,000-message end-to-end export. Measure opening, selective and broad search, pagination, and return navigation from a real PDF with realistic text/category sizes; validate Safari itself as well as Playwright WebKit. Do not impose a performance budget or change the implementation until measurements identify a bottleneck. Full-render and combined-assembly scale remain separate release evidence.
+
+The browser workflow uses 4,096 bytes of synthetic body padding per record, varied dates/participants/labels, and five-message conversations. It deliberately reuses one real PDF target; it does not render 30,000 PDFs. Set `INDEX_BENCHMARK_BODY_BYTES` to change body padding. It records `workload.json`, per-browser metrics, and screenshots in the printed artifact directory. Set `INDEX_BENCHMARK_ARCHIVE` to reuse that directory without regenerating inputs. Browser timings include UI debounce and assertion polling, exclude browser startup, and are observational, not release budgets. A downloaded PDF is reported separately from PDF-URL navigation/history return; neither establishes that every PDF viewer rendered correctly. The reported peak RSS covers only the Python test process, not the browser or full export.
+
 ## CI and evidence
 
 `.github/workflows/ci.yml` runs formatting, lint, types, the Python unit/property
