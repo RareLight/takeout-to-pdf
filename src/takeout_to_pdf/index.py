@@ -796,9 +796,11 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
     )
     content = (
         '<nav class="quick-nav" aria-label="Page sections">'
-        '<a href="#find-messages">Find messages</a><a href="#browse-archive">Browse by category</a>'
+        '<a href="#browse-archive">Browse by category</a><a href="#find-messages">Find messages</a>'
         '<a href="#messages-table">All messages</a></nav>'
         + scope
+        + '<h2 id="browse-archive">Browse by category</h2>'
+        f'<div class="browse">{"".join(browse)}</div>'
         + '<h2 id="find-messages">Find a message</h2>'
         '<p class="muted">Search message text, subjects, people, labels, and attachment names. '
         "Attachment contents are not searched.</p>"
@@ -806,8 +808,6 @@ def write_index(root: Path, entries: list[dict], summary: dict, *, basic: bool =
         + f'<p id="result-count" role="status" aria-live="polite">{len(entries)} selected messages</p>'
         '<p id="no-results" class="notice" hidden>No messages match these filters. Try clearing a filter.</p>'
         "<noscript><p>JavaScript is disabled. All chronological messages and static browsing links remain available.</p></noscript>"
-        '<h2 id="browse-archive">Browse by category</h2>'
-        f'<div class="browse">{"".join(browse)}</div>'
         '<h2 id="messages-table">Messages in date order</h2>'
         + _pager(root_paths, 0, root / "index.html", root, "Message pages")
         + _table(entries[:PAGE_SIZE], root / "index.html", root, linked_conversations, basic)

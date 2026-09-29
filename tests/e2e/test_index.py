@@ -88,6 +88,12 @@ def test_index_leads_with_readable_navigation_and_keeps_technical_details_out_of
     assert '<nav class="quick-nav"' in index
     assert 'href="#find-messages"' in index
     assert 'href="#browse-archive"' in index
+    assert index.index('href="#browse-archive"') < index.index('href="#find-messages"')
+    assert (
+        index.index('id="browse-archive"')
+        < index.index('id="find-messages"')
+        < index.index('id="messages-table"')
+    )
     assert 'aria-controls="message-list"' in index
     assert '<table id="message-list"' in index
     assert '<details class="browse-group"' in index
